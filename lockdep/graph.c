@@ -1,32 +1,37 @@
 #include "lockdep.h"
 
-// Global dependency graph. g_adj[i][j] == 1 means there's an edge from lock i to lock j.
-static uint8_t g_adj[LOCKDEP_MAX_LOCKS][LOCKDEP_MAX_LOCKS] = {{0}};
+/*
+ * Global dependency graph.
+ * g_dependency_graph[u][v] == 1 means an observed dependency edge Lu -> Lv.
+ */
+static uint8_t g_dependency_graph[LOCKDEP_MAX_LOCK_SLOTS][LOCKDEP_MAX_LOCK_SLOTS] = {{0}};
 
-// Stats
-static uint64_t g_edges_added = 0;
-static uint64_t g_cycles_found = 0;
+/* Optional small stats for debugging / future summary. */
+static int g_dependency_edge_count = 0;
+static int g_dependency_cycle_count = 0;
 
 /**
- * DFS helper to check reachability in the lock dependency graph.
- * This helper assumes the caller already holds g_meta_lock.
- * @param cur The current lock ID.
- * @param target The target lock ID.
- * @param visited A boolean array to track visited nodes.
- * @return 1 if reachable, 0 otherwise.
+ * DFS helper to find whether target_lock_slot is reachable from cur_lock_slot.
+ * Also records parent pointers so we can reconstruct the existing dependency chain.
+ * Caller must already hold g_meta_lock.
  */
-static int lockdep_reachable_locked(unsigned int cur,
-                                    unsigned int target,
-                                    uint8_t visited[LOCKDEP_MAX_LOCKS]) {
-    if (cur == target) {
+static int lockdep_find_path_locked(int cur_lock_slot,
+                                    int target_lock_slot,
+                                    int visited[LOCKDEP_MAX_LOCK_SLOTS],
+                                    int parent[LOCKDEP_MAX_LOCK_SLOTS]) {
+    if (cur_lock_slot == target_lock_slot) {
         return 1;
     }
 
-    visited[cur] = 1;
+    visited[cur_lock_slot] = 1;
 
-    for (int next = 0; next < g_num_locks; next++) {
-        if (g_adj[cur][next] && !visited[next]) {
-            if (lockdep_reachable_locked((unsigned int)next, target, visited)) {
+    for (int next_lock_slot = 0; next_lock_slot < g_lock_slot_count; next_lock_slot++) {
+        if (g_dependency_graph[cur_lock_slot][next_lock_slot] && !visited[next_lock_slot]) {
+            parent[next_lock_slot] = cur_lock_slot;
+            if (lockdep_find_path_locked(next_lock_slot,
+                                         target_lock_slot,
+                                         visited,
+                                         parent)) {
                 return 1;
             }
         }
@@ -36,41 +41,68 @@ static int lockdep_reachable_locked(unsigned int cur,
 }
 
 /**
- * Add edge from -> to.
+ * Add a dependency edge from one held lock slot to a newly acquired lock slot.
  * If the new edge closes a cycle, report a potential deadlock.
- * @param from the lock on the held stack.
- * @param to the new lock being acquired.
  */
-void lockdep_add_edge_and_check_cycle(unsigned int from, unsigned int to) {
-    if (from == to) {
+void lockdep_add_edge_and_check_cycle(int from_lock_slot, int to_lock_slot) {
+    if (from_lock_slot == to_lock_slot) {
         return;
     }
 
     int found_cycle = 0;
+    int existing_chain[LOCKDEP_MAX_LOCK_SLOTS];
+    int existing_chain_len = 0;
 
     lockdep_meta_lock();
 
-    if (!g_adj[from][to]) {
-        uint8_t visited[LOCKDEP_MAX_LOCKS] = {0};
-
-        /*
-         * If 'to' can already reach 'from', then adding from -> to
-         * closes a cycle.
-         */
-        if (lockdep_reachable_locked(to, from, visited)) {
-            found_cycle = 1;
-            g_cycles_found++;
+    if (!g_dependency_graph[from_lock_slot][to_lock_slot]) {
+        int visited[LOCKDEP_MAX_LOCK_SLOTS] = {0};
+        int parent[LOCKDEP_MAX_LOCK_SLOTS];
+        for (int i = 0; i < LOCKDEP_MAX_LOCK_SLOTS; i++) {
+            parent[i] = LOCKDEP_INVALID_SLOT;
         }
 
-        g_adj[from][to] = 1;
-        g_edges_added++;
+        /*
+         * If Lto can already reach Lfrom, then adding Lfrom -> Lto closes a cycle.
+         */
+        if (lockdep_find_path_locked(to_lock_slot,
+                                     from_lock_slot,
+                                     visited,
+                                     parent)) {
+            int reverse_chain[LOCKDEP_MAX_LOCK_SLOTS];
+            int reverse_chain_len = 0;
+            int cur_lock_slot = from_lock_slot;
+
+            found_cycle = 1;
+            g_dependency_cycle_count++;
+
+            while (cur_lock_slot != LOCKDEP_INVALID_SLOT &&
+                   reverse_chain_len < LOCKDEP_MAX_LOCK_SLOTS) {
+                reverse_chain[reverse_chain_len++] = cur_lock_slot;
+                if (cur_lock_slot == to_lock_slot) {
+                    break;
+                }
+                cur_lock_slot = parent[cur_lock_slot];
+            }
+
+            if (reverse_chain_len > 0 &&
+                reverse_chain[reverse_chain_len - 1] == to_lock_slot) {
+                for (int i = reverse_chain_len - 1; i >= 0; i--) {
+                    existing_chain[existing_chain_len++] = reverse_chain[i];
+                }
+            }
+        }
+
+        g_dependency_graph[from_lock_slot][to_lock_slot] = 1;
+        g_dependency_edge_count++;
     }
 
     lockdep_meta_unlock();
 
     if (found_cycle) {
-        dprintf(2,
-                "[LOCKDEP] potential deadlock: adding edge %u -> %u closes a cycle\n",
-                from, to);
+        lockdep_report_potential_deadlock(from_lock_slot,
+                                          to_lock_slot,
+                                          existing_chain,
+                                          existing_chain_len);
     }
 }

@@ -1,55 +1,77 @@
 #include "lockdep.h"
 
 /**
- * Detect an actual deadlock by following the runtime wait-for chain.
+ * Collect the actual wait-for chain starting from
+ * Tself -> Ltarget -> Towner -> ...
  * Caller must hold g_meta_lock.
- * @param self_slot The slot ID of the current thread.
- * @param target_lock The ID of the lock being waited on.
- * @param owner_out A pointer to store the owner slot ID if found.
- * @return 1 if an actual deadlock is detected, 0 otherwise.
+ *
+ * thread_chain[0] is the current thread slot.
+ * For each edge i:
+ *   thread_chain[i] -> lock_chain[i] -> thread_chain[i + 1]
+ *
+ * @return 1 if the chain closes back to the current thread, 0 otherwise.
  */
-static int lockdep_detect_actual_deadlock_locked(int self_slot, unsigned int target_lock, int *owner_out) {
-    int owner = g_locks[target_lock].owner_slot;
-    if (owner_out) {
-        *owner_out = owner;
-    }
+static int lockdep_collect_actual_deadlock_chain_locked(int self_thread_slot,
+                                                        int target_lock_slot,
+                                                        int *thread_chain,
+                                                        int *lock_chain,
+                                                        int *edge_count_out) {
+    int edge_count = 0;
+    int current_lock_slot = target_lock_slot;
 
-    while (owner != -1) {
-        if (owner == self_slot) {
-            return 1;
-        }
+    thread_chain[0] = self_thread_slot;
 
-        unsigned int next_lock = g_threads[owner].waiting_on;
-        if (next_lock == (unsigned int) -1) {
+    while (edge_count < LOCKDEP_MAX_THREAD_SLOTS) {
+        int owner_thread_slot = g_lock_slots[current_lock_slot].owner_thread_slot;
+        if (owner_thread_slot == LOCKDEP_INVALID_SLOT) {
+            *edge_count_out = edge_count;
             return 0;
         }
 
-        owner = g_locks[next_lock].owner_slot;
+        lock_chain[edge_count] = current_lock_slot;
+        thread_chain[edge_count + 1] = owner_thread_slot;
+        edge_count++;
+
+        if (owner_thread_slot == self_thread_slot) {
+            *edge_count_out = edge_count;
+            return 1;
+        }
+
+        current_lock_slot = g_thread_slots[owner_thread_slot].waiting_on_lock_slot;
+        if (current_lock_slot == LOCKDEP_INVALID_SLOT) {
+            *edge_count_out = edge_count;
+            return 0;
+        }
     }
 
+    *edge_count_out = edge_count;
     return 0;
 }
 
 /**
  * Update waiting state and check for actual deadlock before blocking on a mutex.
- * @param mutex The mutex to lock.
- * @return 1 if a deadlock is detected, 0 otherwise.
+ * @param mutex The mutex that will block the current thread.
+ * @return 1 if an actual deadlock is detected, 0 otherwise.
  */
 int lockdep_before_blocking_mutex_lock(pthread_mutex_t *mutex) {
-    int self_slot = lockdep_get_or_register_thread_slot();
-    unsigned int target_lock = lockdep_lookup_or_create_lock_id(mutex);
-    int owner_slot = -1;
-    int found_deadlock;
+    int self_thread_slot = lockdep_get_or_register_thread_slot();
+    int target_lock_slot = lockdep_lookup_or_create_lock_slot(mutex);
+    int thread_chain[LOCKDEP_MAX_THREAD_SLOTS + 1];
+    int lock_chain[LOCKDEP_MAX_THREAD_SLOTS];
+    int edge_count = 0;
+    int found_deadlock = 0;
 
     lockdep_meta_lock();
-    g_threads[self_slot].waiting_on = target_lock;
-    found_deadlock = lockdep_detect_actual_deadlock_locked(self_slot, target_lock, &owner_slot);
+    g_thread_slots[self_thread_slot].waiting_on_lock_slot = target_lock_slot;
+    found_deadlock = lockdep_collect_actual_deadlock_chain_locked(self_thread_slot,
+                                                                  target_lock_slot,
+                                                                  thread_chain,
+                                                                  lock_chain,
+                                                                  &edge_count);
     lockdep_meta_unlock();
 
     if (found_deadlock) {
-        lockdep_report_actual_deadlock((unsigned int)self_slot,
-                                       target_lock,
-                                       owner_slot);
+        lockdep_report_actual_deadlock(thread_chain, lock_chain, edge_count);
         return 1;
     }
 
@@ -57,66 +79,67 @@ int lockdep_before_blocking_mutex_lock(pthread_mutex_t *mutex) {
 }
 
 /**
- * Clear waiting state.
+ * Clear waiting state for the current thread.
  */
 void lockdep_cancel_wait(void) {
-    int self_slot = lockdep_get_or_register_thread_slot();
+    int self_thread_slot = lockdep_get_or_register_thread_slot();
 
     lockdep_meta_lock();
-    g_threads[self_slot].waiting_on = (unsigned int) -1;
+    g_thread_slots[self_thread_slot].waiting_on_lock_slot = LOCKDEP_INVALID_SLOT;
     lockdep_meta_unlock();
 }
 
 /**
- * Acquire a mutex and update the lock dependency tracking.
- * @param mutex The mutex to acquire.
- * @param via_trylock Whether the mutex was acquired via trylock.
+ * Acquire a mutex and update lockdep state.
+ * Potential deadlock tracking uses the global dependency graph.
+ * Actual deadlock tracking uses owner/waiting state.
  */
 void lockdep_acquire_mutex(pthread_mutex_t *mutex, int via_trylock) {
     (void)via_trylock;
 
-    // Get or register thread/lock
-    int self_slot = lockdep_get_or_register_thread_slot();
-    unsigned int id = lockdep_lookup_or_create_lock_id(mutex);
+    int self_thread_slot = lockdep_get_or_register_thread_slot();
+    int new_lock_slot = lockdep_lookup_or_create_lock_slot(mutex);
 
-    // Log the old held-set before pushing the new lock
-    lockdep_log_held_context(id);
+    /* Show the held set before pushing the new lock slot. */
+    lockdep_log_held_lock_slots(new_lock_slot);
 
-    // Update graph
-    for (unsigned int i = 0; i < tls_state.held_count; i++) {
-        lockdep_add_edge_and_check_cycle(tls_state.held[i], id);
+    /* For each currently held lock slot H, record dependency H -> new_lock_slot. */
+    for (int i = 0; i < tls_thread_state.held_lock_slot_count; i++) {
+        lockdep_add_edge_and_check_cycle(tls_thread_state.held_lock_slots[i],
+                                         new_lock_slot);
     }
 
-    // Push new held lock
-    lockdep_push_held(id);
+    /* Update the current thread's held-lock stack. */
+    lockdep_push_held_lock_slot(new_lock_slot);
 
-    // Update ownership
+    /* Update runtime ownership / waiting state. */
     lockdep_meta_lock();
-    g_threads[self_slot].waiting_on = (unsigned int) -1;
-    g_locks[id].owner_slot = self_slot;
+    g_thread_slots[self_thread_slot].waiting_on_lock_slot = LOCKDEP_INVALID_SLOT;
+    g_lock_slots[new_lock_slot].owner_thread_slot = self_thread_slot;
     lockdep_meta_unlock();
 }
 
 /**
- * Release a mutex and update the lock dependency tracking.
- * @param mutex The mutex to release.
+ * Release a mutex and update lockdep state.
  */
 void lockdep_release_mutex(pthread_mutex_t *mutex) {
-    int self_slot = lockdep_get_or_register_thread_slot();
-    unsigned int id;
-    if (!lockdep_lookup_lock_id(mutex, &id)) {
-        dprintf(2, "[LOCKDEP] warning: unlock on unknown mutex=%p tid=%d\n",
-                (void *)mutex, gettid());
+    int self_thread_slot = lockdep_get_or_register_thread_slot();
+    int lock_slot;
+
+    if (!lockdep_lookup_lock_slot(mutex, &lock_slot)) {
+        dprintf(2,
+                "[LOCKDEP] warning: unlock unknown mutex=%p tid=%d\n",
+                (void *)mutex,
+                gettid());
         return;
     }
 
-    // Clear ownership
     lockdep_meta_lock();
-    if (g_locks[id].owner_slot == self_slot) {
-        g_locks[id].owner_slot = -1;
+    if (g_lock_slots[lock_slot].owner_thread_slot == self_thread_slot) {
+        g_lock_slots[lock_slot].owner_thread_slot = LOCKDEP_INVALID_SLOT;
     }
-    g_threads[self_slot].waiting_on = (unsigned int) -1;
+    g_thread_slots[self_thread_slot].waiting_on_lock_slot = LOCKDEP_INVALID_SLOT;
     lockdep_meta_unlock();
 
-    lockdep_remove_held(id);
+    lockdep_remove_held_lock_slot(lock_slot);
 }
