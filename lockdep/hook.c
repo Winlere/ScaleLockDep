@@ -50,8 +50,10 @@ static void lockdep_ctor(void) {
  * Hooked functions of system pthread functions.
  * They: 1. Check if the real function pointers are ready;
  *       2. Prevent recursive hooking by checking the thread-local flag;
- *       3. Call the core lockdep functions to update the lock dependency tracking;
- *       4. Call the real pthread functions to perform the actual locking/unlocking;
+ *       3. Try to acquire the lock with trylock.
+ *       4. If successful, call the core functions to update the dependency graph.
+ *       5. If the lock is busy, call the core function to check for actual deadlock before blocking.
+ *       6. If there is no deadlock, try to acquire the lock again and update the dependency graph if successful.
  */
 int pthread_mutex_lock(pthread_mutex_t *mutex) {
     if (!real_pthread_mutex_lock) {
@@ -63,14 +65,34 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
     }
     lockdep_hooked = 1;
 
-    int rc = real_pthread_mutex_lock(mutex);
+    int rc = real_pthread_mutex_trylock(mutex);
     if (rc == 0) {
         lockdep_log("lock", mutex, rc);
         lockdep_acquire_mutex(mutex, 0);
-    } else {
-        lockdep_log("lock-fail", mutex, rc);
+        lockdep_hooked = 0;
+        return 0;
     }
 
+    if (rc == EBUSY) {
+        if (lockdep_before_blocking_mutex_lock(mutex)) {
+            lockdep_hooked = 0;
+            _exit(66);
+        }
+
+        rc = real_pthread_mutex_lock(mutex);
+        if (rc == 0) {
+            lockdep_log("lock", mutex, rc);
+            lockdep_acquire_mutex(mutex, 0);
+        } else {
+            lockdep_log("lock-fail", mutex, rc);
+            lockdep_cancel_wait();
+        }
+
+        lockdep_hooked = 0;
+        return rc;
+    }
+
+    lockdep_log("lock-fail", mutex, rc);
     lockdep_hooked = 0;
     return rc;
 }

@@ -36,3 +36,18 @@ void lockdep_log_held_context(unsigned int new_id) {
 
     dprintf(2, "]\n");
 }
+
+/**
+ * Report an actual deadlock.
+ * @param self_slot The slot ID of the current thread.
+ * @param target_lock The ID of the lock being waited on.
+ * @param owner_slot The slot ID of the owner thread.
+ */
+void lockdep_report_actual_deadlock(unsigned int self_slot, unsigned int target_lock, int owner_slot) {
+    pid_t self_tid = g_threads[self_slot].tid;
+    pid_t owner_tid = (owner_slot >= 0) ? g_threads[owner_slot].tid : -1;
+
+    dprintf(2,
+            "[LOCKDEP] actual deadlock: tid=%d waiting_on_lock=%u owner_slot=%d owner_tid=%d\n",
+            self_tid, target_lock, owner_slot, owner_tid);
+}

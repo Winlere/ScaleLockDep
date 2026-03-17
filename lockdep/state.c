@@ -6,11 +6,20 @@ atomic_flag g_meta_lock = ATOMIC_FLAG_INIT;
 // Global lock registry
 lockdep_lock_entry_t g_locks[LOCKDEP_MAX_LOCKS];
 
+// Global thread registry
+lockdep_thread_entry_t g_threads[LOCKDEP_MAX_THREADS];
+
 // Number of locks registered
 int g_num_locks = 0;
 
+// Number of threads registered
+int g_num_threads = 0;
+
 // Per-thread state for held locks
 __thread lockdep_thread_state_t tls_state = {0};
+
+// Per-thread slot ID in the thread registry
+__thread int tls_thread_slot = -1;
 
 /**
  * Acquire the global metadata lock.
@@ -73,6 +82,7 @@ unsigned int lockdep_lookup_or_create_lock_id(pthread_mutex_t *mutex) {
     unsigned int new_id = (unsigned int)g_num_locks;
     g_locks[g_num_locks].addr = mutex;
     g_locks[g_num_locks].id = new_id;
+    g_locks[g_num_locks].owner_slot = -1;
     g_num_locks++;
 
     lockdep_meta_unlock();
@@ -108,4 +118,38 @@ void lockdep_remove_held(unsigned int id) {
 
     dprintf(2, "[LOCKDEP] warning: unlock unknown-held lock id=%u tid=%d\n",
             id, gettid());
+}
+
+/**
+ * Get the slot ID for the current thread, registering it if necessary.
+ * @return The slot ID for the current thread.
+ */
+int lockdep_get_or_register_thread_slot(void) {
+    if (tls_thread_slot >= 0) {
+        return tls_thread_slot;
+    }
+
+    pid_t tid = gettid();
+    lockdep_meta_lock();
+
+    for (int i = 0; i < g_num_threads; i++) {
+        if (g_threads[i].tid == tid) {
+            tls_thread_slot = i;
+            lockdep_meta_unlock();
+            return tls_thread_slot;
+        }
+    }
+
+    if (g_num_threads >= LOCKDEP_MAX_THREADS) {
+        lockdep_meta_unlock();
+        lockdep_panic("[LOCKDEP] too many threads\n");
+    }
+
+    int new_slot = g_num_threads++;
+    g_threads[new_slot].tid = tid;
+    g_threads[new_slot].waiting_on = (unsigned int) -1;
+    tls_thread_slot = new_slot;
+
+    lockdep_meta_unlock();
+    return tls_thread_slot;
 }
