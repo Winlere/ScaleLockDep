@@ -18,7 +18,7 @@ Based on `dlsym` it hooks the `pthread_mutex` library transparently, so you don'
 All parameters are defined in `lockdep.h`. You may adjust accordingly:
 
 - `LOCKDEP_MAX_LOCK_SLOTS` Deafult 256. Maximum number of locks that the library can track.
-- `LOCKDEP_MAX_HELD_LOCK_SLOTS` Default 64. Maximum number of locks per-process that the library can track.
+- `LOCKDEP_MAX_HELD_LOCK_SLOTS` Default 64. Maximum number of locks per-thread that the library can track.
 - `LOCKDEP_MAX_THREAD_SLOTS` Defaule 128. Maximum number of threads that the library can track.
 
 ## Build
