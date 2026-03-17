@@ -9,7 +9,16 @@ void lockdep_acquire_mutex(pthread_mutex_t *mutex, int via_trylock) {
     (void)via_trylock;
 
     unsigned int id = lockdep_lookup_or_create_lock_id(mutex);
+
+    // Log the old held-set before pushing the new lock
     lockdep_log_held_context(id);
+
+    // Update graph
+    for (unsigned int i = 0; i < tls_state.held_count; i++) {
+        lockdep_add_edge_and_check_cycle(tls_state.held[i], id);
+    }
+
+    // Push new held lock
     lockdep_push_held(id);
 }
 

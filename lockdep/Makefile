@@ -3,7 +3,7 @@ CFLAGS = -O2 -g -Wall -Wextra -std=gnu11 -fPIC -pthread
 LDFLAGS = -shared -ldl -pthread
 
 TARGET = liblockdep.so
-SRCS = hook.c core.c log.c state.c
+SRCS = hook.c core.c log.c state.c graph.c
 OBJS = $(SRCS:.c=.o)
 
 all: $(TARGET)

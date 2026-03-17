@@ -50,4 +50,7 @@ void lockdep_remove_held(unsigned int id);
 void lockdep_acquire_mutex(pthread_mutex_t *mutex, int via_trylock);
 void lockdep_release_mutex(pthread_mutex_t *mutex);
 
+// Graph
+void lockdep_add_edge_and_check_cycle(unsigned int from, unsigned int to);
+
 #endif /* LOCKDEP_H */
