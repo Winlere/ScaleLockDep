@@ -1,0 +1,100 @@
+Experiment: Overhead Microbenchmarks
+Date: 2026-03-18
+Commit ID: 9295d08
+
+
+--- Settings ---
+
+Machine
+  OS       : Linux archdell 6.19.6-arch1-1 x86_64
+  CPU      : 11th Gen Intel Core i7-11700 @ 2.50 GHz (8 cores / 16 threads)
+  Memory   : 16 GiB RAM
+
+Software
+  Compiler : gcc (flags: -Wall -Wextra -pthread)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : 9295d0832021633fef4cf138afc7030ff1d72a4f
+
+--- Parameters ---
+
+Benchmark binary : benchmarks/bench_overhead.out
+Invocation       : bench_overhead.out <num_threads> <num_locks> <iters_per_thread>
+Thread counts    : 1, 2, 4, 8, 16, 32, 64
+Iterations       : 100,000 per thread
+Metric           : lock_ops_per_sec  (total lock/unlock pairs / wall time)
+
+Scenarios
+  high-contention : num_locks = 1           (all threads share one lock)
+  low-contention  : num_locks = num_threads  (each thread owns its own lock,
+                                              isolates lockdep tracking overhead
+                                              from application synchronization)
+
+Conditions per scenario
+  baseline : no LD_PRELOAD
+  lockdep  : LD_PRELOAD=./lockdep/liblockdep.so
+
+lockdep limits (lockdep.h)
+  LOCKDEP_MAX_LOCK_SLOTS    = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS  = 128
+
+---
+
+Key findings
+
+Commit ID: 9295d08
+
+High contention (1 shared lock)
+
+┌─────────┬────────────────┬───────────────┬──────────┐
+│ threads │ baseline ops/s │ lockdep ops/s │ overhead │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 1       │ 73.8M          │ 17.7M         │ 4.2×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 2       │ 16.0M          │ 3.7M          │ 4.3×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 8       │ 17.5M          │ 3.3M          │ 5.3×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 32      │ 14.7M          │ 2.4M          │ 6.2×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 64      │ 15.4M          │ 1.3M          │ 12.2×    │
+└─────────┴────────────────┴───────────────┴──────────┘
+
+Baseline is flat across threads (the application lock is the
+bottleneck). Lockdep degrades further — the global g_meta_lock spinlock
+is fighting both the application lock and between threads.
+
+Low contention (each thread has its own lock)
+
+┌─────────┬────────────────┬────────────────┬──────────┐
+│ threads │ baseline ops/s │ lockdep ops/s  │ overhead │
+├─────────┼────────────────┼────────────────┼──────────┤
+│ 1       │ 70.6M          │ 17.4M          │ 4.1×     │
+├─────────┼────────────────┼────────────────┼──────────┤
+│ 2       │ 19.9M          │ 4.1M           │ 4.9×     │
+├─────────┼────────────────┼────────────────┼──────────┤
+│ 4       │ 21.3M          │ 3.0M           │ 7.1×     │
+├─────────┼────────────────┼────────────────┼──────────┤
+│ 8       │ 27.4M          │ 1.6M           │ 17.1×    │
+├─────────┼────────────────┼────────────────┼──────────┤
+│ 16      │ 45.8M          │ 1.1M           │ 40.7×    │
+├─────────┼────────────────┼────────────────┼──────────┤
+│ 32/64   │ scales up      │ did not finish │ —        │
+└─────────┴────────────────┴────────────────┴──────────┘
+
+Baseline scales (lock operations are parallel). Lockdep collapses — even
+though there's no application-level contention, every lock/unlock
+funnels through g_meta_lock, making lockdep's internal state update
+fully serialized. This is the scalability bottleneck identified by the
+experiment.
+
+---
+What the experiment reveals
+
+The single global spinlock (g_meta_lock in state.c) protecting the
+dependency graph and slot registries is the root cause. When threads
+don't contend on application locks at all, lockdep's tracking overhead
+still serializes them completely — overhead scales with thread count,
+not with actual lock contention. This is the primary target for a
+ScaleLockDep improvement (e.g., per-lock or sharded metadata locks, or
+read-write locks for the dependency graph reads).
