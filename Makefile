@@ -6,7 +6,15 @@ BENCHMARKS = \
 	benchmarks/deadlock_2thread_2lock.out \
 	benchmarks/deadlock_3thread_circular.out
 
-.PHONY: all build run clean
+OVERHEAD_BIN = benchmarks/bench_overhead.out
+
+# Thread counts to sweep
+THREAD_COUNTS = 1 2 4 8 16 32 64
+
+# Iterations per thread (tune down if runtime is too long)
+ITERS = 100000
+
+.PHONY: all build run overhead clean
 
 all: build
 
@@ -15,7 +23,7 @@ build: $(LOCKDEP_LIB) $(BENCHMARKS)
 $(LOCKDEP_LIB):
 	$(MAKE) -C lockdep
 
-$(BENCHMARKS):
+$(BENCHMARKS) $(OVERHEAD_BIN):
 	$(MAKE) -C benchmarks
 
 # Run all benchmarks under lockdep; deadlock ones exit 66, correct ones exit 0.
@@ -35,6 +43,43 @@ run: build
 			echo "[RESULT] Unexpected exit code: $$ret"; \
 		fi; \
 		echo ""; \
+	done
+
+# ---------------------------------------------------------------------------
+# Overhead experiment
+#
+# Two scenarios:
+#   high-contention : all threads share a single lock
+#   low-contention  : each thread gets its own lock (num_locks == num_threads)
+#
+# For each scenario, runs WITHOUT lockdep (baseline) then WITH lockdep.
+# Columns: threads  locks  iters  wall_ns  total_lock_ops  lock_ops_per_sec
+# ---------------------------------------------------------------------------
+overhead: build $(OVERHEAD_BIN)
+	@echo "=== High-contention (1 shared lock) ==="
+	@echo "--- baseline (no lockdep) ---"
+	@printf "threads\tlocks\titers\twall_ns\ttotal_ops\tops_per_sec\n"
+	@for t in $(THREAD_COUNTS); do \
+		./$(OVERHEAD_BIN) $$t 1 $(ITERS); \
+	done
+	@echo ""
+	@echo "--- with lockdep ---"
+	@printf "threads\tlocks\titers\twall_ns\ttotal_ops\tops_per_sec\n"
+	@for t in $(THREAD_COUNTS); do \
+		LD_PRELOAD=./$(LOCKDEP_LIB) ./$(OVERHEAD_BIN) $$t 1 $(ITERS); \
+	done
+	@echo ""
+	@echo "=== Low-contention (each thread owns its own lock) ==="
+	@echo "--- baseline (no lockdep) ---"
+	@printf "threads\tlocks\titers\twall_ns\ttotal_ops\tops_per_sec\n"
+	@for t in $(THREAD_COUNTS); do \
+		./$(OVERHEAD_BIN) $$t $$t $(ITERS); \
+	done
+	@echo ""
+	@echo "--- with lockdep ---"
+	@printf "threads\tlocks\titers\twall_ns\ttotal_ops\tops_per_sec\n"
+	@for t in $(THREAD_COUNTS); do \
+		LD_PRELOAD=./$(LOCKDEP_LIB) ./$(OVERHEAD_BIN) $$t $$t $(ITERS); \
 	done
 
 clean:
