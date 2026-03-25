@@ -1,0 +1,144 @@
+Experiment: Per-Operation Latency — Lock Acquire and Release Delay
+Date: 2026-03-24
+Commit ID: 9295d08
+
+--- Settings ---
+
+Machine
+  OS       : Linux archdell 6.19.6-arch1-1 x86_64
+  CPU      : 11th Gen Intel Core i7-11700 @ 2.50 GHz (8 cores / 16 threads)
+  Memory   : 16 GiB RAM
+
+Software
+  Compiler : gcc (flags: -Wall -Wextra -pthread)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : 9295d0832021633fef4cf138afc7030ff1d72a4f
+
+--- Parameters ---
+
+Benchmark binary : benchmarks/bench_latency.out
+Invocation       : bench_latency.out <num_threads> <iters_per_thread>
+Thread counts    : 1, 2, 4, 8, 16, 32, 64
+Iterations       : 100,000 per thread
+Locks            : 1 shared lock
+Metric           : average nanoseconds per operation (lock, unlock, pair)
+
+Scenario
+  1 shared lock, varying thread counts. Each iteration: time lock, time
+  unlock, accumulate separately. Reports per-thread averages aggregated
+  across all threads.
+
+  Note: clock_gettime(CLOCK_MONOTONIC) adds ~15-25 ns of measurement
+  overhead per call. This overhead is consistent across baseline and
+  lockdep, so the *difference* between conditions is accurate. Absolute
+  values include this measurement cost.
+
+Conditions
+  baseline : no LD_PRELOAD
+  lockdep  : LD_PRELOAD=./lockdep/liblockdep.so
+
+lockdep limits (lockdep.h)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+Baseline (no lockdep)
+threads  iters   avg_lock_ns  avg_unlock_ns  avg_pair_ns
+1        100000  18.4         18.0           36.4
+2        100000  123.4        107.8          231.2
+4        100000  289.8        177.9          467.7
+8        100000  680.8        463.1          1143.9
+16       100000  1293.8       1099.0         2392.8
+32       100000  3098.8       1764.0         4862.9
+64       100000  7977.5       1555.1         9532.7
+
+With lockdep
+threads  iters   avg_lock_ns  avg_unlock_ns  avg_pair_ns
+1        100000  40.9         40.1           81.0
+2        100000  349.9        258.0          607.9
+4        100000  837.1        404.7          1241.8
+8        100000  2141.2       819.2          2960.4
+16       100000  4602.5       1758.6         6361.0
+32       100000  12194.4      3173.4         15367.8
+64       100000  46581.7      9152.8         55734.5
+
+--- Key Findings ---
+
+Per-operation latency
+
+┌─────────┬──────────────────────────┬──────────────────────────┐
+│         │      lock (ns)           │     unlock (ns)          │
+│ threads ├────────┬────────┬────────┼────────┬────────┬────────┤
+│         │ base   │ lockdep│ added  │ base   │ lockdep│ added  │
+├─────────┼────────┼────────┼────────┼────────┼────────┼────────┤
+│ 1       │ 18     │ 41     │ +23    │ 18     │ 40     │ +22    │
+├─────────┼────────┼────────┼────────┼────────┼────────┼────────┤
+│ 2       │ 123    │ 350    │ +227   │ 108    │ 258    │ +150   │
+├─────────┼────────┼────────┼────────┼────────┼────────┼────────┤
+│ 4       │ 290    │ 837    │ +547   │ 178    │ 405    │ +227   │
+├─────────┼────────┼────────┼────────┼────────┼────────┼────────┤
+│ 8       │ 681    │ 2141   │ +1460  │ 463    │ 819    │ +356   │
+├─────────┼────────┼────────┼────────┼────────┼────────┼────────┤
+│ 16      │ 1294   │ 4603   │ +3309  │ 1099   │ 1759   │ +660   │
+├─────────┼────────┼────────┼────────┼────────┼────────┼────────┤
+│ 32      │ 3099   │ 12194  │ +9096  │ 1764   │ 3173   │ +1409  │
+├─────────┼────────┼────────┼────────┼────────┼────────┼────────┤
+│ 64      │ 7978   │ 46582  │ +38604 │ 1555   │ 9153   │ +7598  │
+└─────────┴────────┴────────┴────────┴────────┴────────┴────────┘
+
+Total pair latency and overhead
+
+┌─────────┬──────────┬──────────┬──────────┬──────────┐
+│ threads │ base (ns)│ lockdep  │ added    │ overhead │
+├─────────┼──────────┼──────────┼──────────┼──────────┤
+│ 1       │ 36       │ 81       │ +45      │ 2.2×     │
+├─────────┼──────────┼──────────┼──────────┼──────────┤
+│ 2       │ 231      │ 608      │ +377     │ 2.6×     │
+├─────────┼──────────┼──────────┼──────────┼──────────┤
+│ 4       │ 468      │ 1242     │ +774     │ 2.7×     │
+├─────────┼──────────┼──────────┼──────────┼──────────┤
+│ 8       │ 1144     │ 2960     │ +1817    │ 2.6×     │
+├─────────┼──────────┼──────────┼──────────┼──────────┤
+│ 16      │ 2393     │ 6361     │ +3968    │ 2.7×     │
+├─────────┼──────────┼──────────┼──────────┼──────────┤
+│ 32      │ 4863     │ 15368    │ +10505   │ 3.2×     │
+├─────────┼──────────┼──────────┼──────────┼──────────┤
+│ 64      │ 9533     │ 55735    │ +46202   │ 5.8×     │
+└─────────┴──────────┴──────────┴──────────┴──────────┘
+
+--- What the Experiment Reveals ---
+
+1. Uncontended lockdep cost (1 thread): lockdep adds +23 ns to lock and
+   +22 ns to unlock. This is the pure instrumentation cost — slot lookup,
+   TLS held-lock push/pop, and g_meta_lock acquire/release with zero
+   contention. Total pair overhead: 45 ns (2.2×).
+
+2. Lock is consistently more expensive than unlock under lockdep. At 8
+   threads, lock adds 1460 ns vs unlock adds 356 ns (4:1 ratio). This is
+   because lock triggers: (a) trylock fast path, (b) if contended,
+   before-blocking wait-chain walk, (c) after acquire, dependency edge
+   insertion + DFS cycle check. Unlock only does: ownership clear + TLS
+   pop.
+
+3. Added delay grows super-linearly with threads. At 1 thread the added
+   pair cost is 45 ns; at 64 threads it is 46,202 ns — a 1000× increase.
+   This is driven by g_meta_lock spinlock contention: with 64 threads,
+   each lock/unlock must spin-wait for the global metadata lock while 63
+   other threads compete for it.
+
+4. Lock delay dominates at high thread counts. At 64 threads, lockdep
+   lock latency (46.6 us) is 5× the unlock latency (9.2 us). The lock
+   path does more work under g_meta_lock (edge insertion, DFS) than the
+   unlock path (ownership clear).
+
+5. The baseline itself shows increasing latency with threads (18 ns → 8 us
+   for lock at 1 → 64 threads) due to mutex contention. Lockdep amplifies
+   this contention because it holds g_meta_lock across the metadata update,
+   extending the effective critical section of every lock/unlock.
+
+Added delay per lock/unlock pair summary:
+  threads:    1     2     4     8      16     32      64
+  added_ns:   45    377   774   1817   3968   10505   46202
+  overhead:   2.2×  2.6×  2.7×  2.6×   2.7×   3.2×    5.8×

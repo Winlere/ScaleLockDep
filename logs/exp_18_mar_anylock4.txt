@@ -1,0 +1,128 @@
+Experiment: Overhead Microbenchmarks — 4-Lock Any-Acquire
+Date: 2026-03-24
+Commit ID: 9295d08
+
+--- Settings ---
+
+Machine
+  OS       : Linux archdell 6.19.6-arch1-1 x86_64
+  CPU      : 11th Gen Intel Core i7-11700 @ 2.50 GHz (8 cores / 16 threads)
+  Memory   : 16 GiB RAM
+
+Software
+  Compiler : gcc (flags: -Wall -Wextra -pthread)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : 9295d0832021633fef4cf138afc7030ff1d72a4f
+
+--- Parameters ---
+
+Benchmark binary : benchmarks/bench_overhead_anylock4.out
+Invocation       : bench_overhead_anylock4.out <num_threads> <iters_per_thread>
+Thread counts    : 1, 2, 4, 8, 16, 32, 64
+Iterations       : 100,000 per thread
+Metric           : ops_per_sec  (total acquisitions / wall time)
+
+Scenario
+  4 shared locks. Each iteration a thread tries each lock in round-robin
+  order starting from lock[tid % 4], taking the first one available:
+    for k in 0..3: pthread_mutex_trylock(lock[(preferred+k) % 4])
+  Falls back to blocking on lock[tid % 4] if all four are busy.
+  Allows up to 4 threads to proceed concurrently (one per lock).
+
+Conditions
+  baseline : no LD_PRELOAD
+  lockdep  : LD_PRELOAD=./lockdep/liblockdep.so
+
+lockdep limits (lockdep.h)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+4-lock any-acquire — baseline
+threads  iters   wall_ns      total_ops  ops_per_sec
+1        100000  1814114      100000     55123327
+2        100000  13119932     200000     15243981
+4        100000  19456594     400000     20558583
+8        100000  59467229     800000     13452788
+16       100000  134165544    1600000    11925566
+32       100000  261541319    3200000    12235160
+64       100000  526045578    6400000    12166246
+
+4-lock any-acquire — with lockdep
+threads  iters   wall_ns      total_ops  ops_per_sec
+1        100000  5653020      100000     17689660
+2        100000  46598995     200000     4291938
+4        100000  173055101    400000     2311403
+8        100000  504301836    800000     1586352
+16       100000  1133919111   1600000    1411035
+32       100000  3030433160   3200000    1055955
+64       100000  5066344830   6400000    1263238
+
+--- Key Findings ---
+
+4-lock any-acquire
+
+┌─────────┬────────────────┬───────────────┬──────────┐
+│ threads │ baseline ops/s │ lockdep ops/s │ overhead │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 1       │ 55.1M          │ 17.7M         │ 3.1×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 2       │ 15.2M          │ 4.3M          │ 3.5×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 4       │ 20.6M          │ 2.3M          │ 8.9×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 8       │ 13.5M          │ 1.6M          │ 8.5×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 16      │ 11.9M          │ 1.4M          │ 8.5×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 32      │ 12.2M          │ 1.1M          │ 11.4×    │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 64      │ 12.2M          │ 1.3M          │ 9.7×     │
+└─────────┴────────────────┴───────────────┴──────────┘
+
+--- Comparison Across Lock Pool Sizes ---
+
+overhead (lockdep ops/s vs baseline ops/s)
+
+┌─────────┬──────────┬──────────┬──────────┐
+│ threads │ 1 lock   │ 2 locks  │ 4 locks  │
+├─────────┼──────────┼──────────┼──────────┤
+│ 1       │ 4.2×     │ 3.4×     │ 3.1×     │
+├─────────┼──────────┼──────────┼──────────┤
+│ 2       │ 4.3×     │ 3.8×     │ 3.5×     │
+├─────────┼──────────┼──────────┼──────────┤
+│ 4       │ 4.2×     │ 3.4×     │ 8.9×     │
+├─────────┼──────────┼──────────┼──────────┤
+│ 8       │ 5.3×     │ 4.3×     │ 8.5×     │
+├─────────┼──────────┼──────────┼──────────┤
+│ 16      │ 5.2×     │ 4.3×     │ 8.5×     │
+├─────────┼──────────┼──────────┼──────────┤
+│ 32      │ 6.2×     │ 5.4×     │ 11.4×    │
+├─────────┼──────────┼──────────┼──────────┤
+│ 64      │ 12.2×    │ 4.8×     │ 9.7×     │
+└─────────┴──────────┴──────────┴──────────┘
+
+--- What the Experiment Reveals ---
+
+1. More locks does not uniformly reduce overhead. The 4-lock case is worse
+   than 2-lock at ≥4 threads (8-11× vs 4-5×), despite offering more
+   application-level parallelism. The reason: each iteration now issues up to
+   4 trylock calls before giving up. Each successful trylock still acquires
+   g_meta_lock internally, but the failed trylocks also touch lockdep state
+   (slot lookup). With 4 locks the average number of lockdep operations per
+   iteration is higher than with 2 locks.
+
+2. Baseline throughput at 4 threads is higher for 4 locks (20.6M) than 2
+   locks (10.9M) — 4 concurrent slots vs 2 reduces application blocking.
+   But lockdep throughput at 4 threads is lower (2.3M vs 3.2M), confirming
+   the overhead cost of additional trylock probes under g_meta_lock.
+
+3. Diminishing returns from more locks for lockdep throughput: lockdep
+   throughput across all thread counts converges toward ~1-2M ops/sec
+   regardless of lock pool size, since g_meta_lock is the hard ceiling.
+
+4. The crossover point matters: below ~2 threads, more locks are strictly
+   better (less contention, same lockdep cost). Above ~4 threads, the extra
+   trylock probes make 4 locks worse than 2 locks under lockdep.
