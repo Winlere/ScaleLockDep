@@ -5,6 +5,7 @@
  * while a subset engage in deadlock-forming behavior after the barrier.
  * Expected: Deadlock for the subset, others may timeout
  */
+#define _XOPEN_SOURCE 600
 #include <pthread.h>
 #include <stdio.h>
 #include <unistd.h>
