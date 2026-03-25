@@ -9,6 +9,7 @@ BENCHMARKS = \
 OVERHEAD_BIN     = benchmarks/bench_overhead.out
 ANYLOCK_BIN      = benchmarks/bench_overhead_anylock.out
 ANYLOCK4_BIN     = benchmarks/bench_overhead_anylock4.out
+CSLEN_BIN        = benchmarks/bench_overhead_cslen.out
 
 # Thread counts to sweep
 THREAD_COUNTS = 1 2 4 8 16 32 64
@@ -16,7 +17,13 @@ THREAD_COUNTS = 1 2 4 8 16 32 64
 # Iterations per thread (tune down if runtime is too long)
 ITERS = 100000
 
-.PHONY: all build run overhead overhead-anylock overhead-anylock4 clean
+# Critical section hold times to sweep (nanoseconds)
+CS_LENGTHS = 0 10 20 30 50 75 100 150 200 300 500 750 1000 10000 100000
+
+# Threads for cslen experiment
+CSLEN_THREADS = 8
+
+.PHONY: all build run overhead overhead-anylock overhead-anylock4 overhead-cslen clean
 
 all: build
 
@@ -25,7 +32,7 @@ build: $(LOCKDEP_LIB) $(BENCHMARKS)
 $(LOCKDEP_LIB):
 	$(MAKE) -C lockdep
 
-$(BENCHMARKS) $(OVERHEAD_BIN) $(ANYLOCK_BIN) $(ANYLOCK4_BIN):
+$(BENCHMARKS) $(OVERHEAD_BIN) $(ANYLOCK_BIN) $(ANYLOCK4_BIN) $(CSLEN_BIN):
 	$(MAKE) -C benchmarks
 
 # Run all benchmarks under lockdep; deadlock ones exit 66, correct ones exit 0.
@@ -117,6 +124,27 @@ overhead-anylock4: build $(ANYLOCK4_BIN)
 	@printf "threads\titers\twall_ns\ttotal_ops\tops_per_sec\n"
 	@for t in $(THREAD_COUNTS); do \
 		LD_PRELOAD=./$(LOCKDEP_LIB) ./$(ANYLOCK4_BIN) $$t $(ITERS); \
+	done
+
+# ---------------------------------------------------------------------------
+# Overhead experiment — critical section length
+#
+# 1 shared lock, fixed thread count. Vary busy-spin hold time inside the
+# critical section: 0, 100ns, 1us, 10us, 100us.
+# Columns: threads  iters  cs_ns  wall_ns  total_ops  ops_per_sec
+# ---------------------------------------------------------------------------
+overhead-cslen: build $(CSLEN_BIN)
+	@echo "=== Critical section length ($(CSLEN_THREADS) threads, 1 shared lock) ==="
+	@echo "--- baseline (no lockdep) ---"
+	@printf "threads\titers\tcs_ns\twall_ns\ttotal_ops\tops_per_sec\n"
+	@for cs in $(CS_LENGTHS); do \
+		./$(CSLEN_BIN) $(CSLEN_THREADS) $(ITERS) $$cs; \
+	done
+	@echo ""
+	@echo "--- with lockdep ---"
+	@printf "threads\titers\tcs_ns\twall_ns\ttotal_ops\tops_per_sec\n"
+	@for cs in $(CS_LENGTHS); do \
+		LD_PRELOAD=./$(LOCKDEP_LIB) ./$(CSLEN_BIN) $(CSLEN_THREADS) $(ITERS) $$cs; \
 	done
 
 clean:
