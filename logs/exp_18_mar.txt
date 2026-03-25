@@ -34,15 +34,53 @@ Conditions per scenario
   lockdep  : LD_PRELOAD=./lockdep/liblockdep.so
 
 lockdep limits (lockdep.h)
-  LOCKDEP_MAX_LOCK_SLOTS    = 256
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
   LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
-  LOCKDEP_MAX_THREAD_SLOTS  = 128
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
 
----
+--- Raw Data ---
 
-Key findings
+High-contention (1 shared lock) — baseline
+threads  locks  iters   wall_ns       total_ops  ops_per_sec
+1        1      100000  1355870       100000     73753383
+2        1      100000  12508215      200000     15989492
+4        1      100000  24642606      400000     16232049
+8        1      100000  45814495      800000     17461723
+16       1      100000  105990043     1600000    15095758
+32       1      100000  217956782     3200000    14681810
+64       1      100000  414464275     6400000    15441620
 
-Commit ID: 9295d08
+High-contention (1 shared lock) — with lockdep
+threads  locks  iters   wall_ns       total_ops  ops_per_sec
+1        1      100000  5659797       100000     17668478
+2        1      100000  54037810      200000     3701112
+4        1      100000  102196265     400000     3914037
+8        1      100000  244482922     800000     3272212
+16       1      100000  550036789     1600000    2908896
+32       1      100000  1357262347    3200000    2357687
+64       1      100000  5062635848    6400000    1264164
+
+Low-contention (num_locks = num_threads) — baseline
+threads  locks  iters   wall_ns       total_ops  ops_per_sec
+1        1      100000  1417302       100000     70556593
+2        2      100000  20060046      400000     19940134
+4        4      100000  75038149      1600000    21322488
+8        8      100000  233282512     6400000    27434547
+16       16     100000  559283736     25600000   45772831
+32       32     100000  1447924736    102400000  70721908
+64       64     100000  4035246327    409600000  101505575
+
+Low-contention (num_locks = num_threads) — with lockdep
+threads  locks  iters   wall_ns         total_ops  ops_per_sec
+1        1      100000  5744889         100000     17406777
+2        2      100000  98667007        400000     4054040
+4        4      100000  536218573       1600000    2983858
+8        8      100000  3968288249      6400000    1612786
+16       16     100000  22833282140     25600000   1121170
+32       32     100000  501450657239    102400000  204208
+64       64     100000  2393250365126   409600000  171148
+
+--- Key Findings ---
 
 High contention (1 shared lock)
 
@@ -53,48 +91,61 @@ High contention (1 shared lock)
 ├─────────┼────────────────┼───────────────┼──────────┤
 │ 2       │ 16.0M          │ 3.7M          │ 4.3×     │
 ├─────────┼────────────────┼───────────────┼──────────┤
+│ 4       │ 16.2M          │ 3.9M          │ 4.2×     │
+├─────────┼────────────────┼───────────────┼──────────┤
 │ 8       │ 17.5M          │ 3.3M          │ 5.3×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 16      │ 15.1M          │ 2.9M          │ 5.2×     │
 ├─────────┼────────────────┼───────────────┼──────────┤
 │ 32      │ 14.7M          │ 2.4M          │ 6.2×     │
 ├─────────┼────────────────┼───────────────┼──────────┤
 │ 64      │ 15.4M          │ 1.3M          │ 12.2×    │
 └─────────┴────────────────┴───────────────┴──────────┘
 
-Baseline is flat across threads (the application lock is the
-bottleneck). Lockdep degrades further — the global g_meta_lock spinlock
-is fighting both the application lock and between threads.
+Baseline is flat across threads (application lock is the bottleneck).
+Lockdep degrades slowly up to 32 threads, then sharply at 64 — the
+global g_meta_lock spinlock compounds with the application lock
+contention.
 
-Low contention (each thread has its own lock)
+Low contention (each thread owns its own lock)
 
-┌─────────┬────────────────┬────────────────┬──────────┐
-│ threads │ baseline ops/s │ lockdep ops/s  │ overhead │
-├─────────┼────────────────┼────────────────┼──────────┤
-│ 1       │ 70.6M          │ 17.4M          │ 4.1×     │
-├─────────┼────────────────┼────────────────┼──────────┤
-│ 2       │ 19.9M          │ 4.1M           │ 4.9×     │
-├─────────┼────────────────┼────────────────┼──────────┤
-│ 4       │ 21.3M          │ 3.0M           │ 7.1×     │
-├─────────┼────────────────┼────────────────┼──────────┤
-│ 8       │ 27.4M          │ 1.6M           │ 17.1×    │
-├─────────┼────────────────┼────────────────┼──────────┤
-│ 16      │ 45.8M          │ 1.1M           │ 40.7×    │
-├─────────┼────────────────┼────────────────┼──────────┤
-│ 32/64   │ scales up      │ did not finish │ —        │
-└─────────┴────────────────┴────────────────┴──────────┘
+┌─────────┬────────────────┬───────────────┬──────────┐
+│ threads │ baseline ops/s │ lockdep ops/s │ overhead │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 1       │ 70.6M          │ 17.4M         │ 4.1×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 2       │ 19.9M          │ 4.1M          │ 4.9×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 4       │ 21.3M          │ 3.0M          │ 7.1×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 8       │ 27.4M          │ 1.6M          │ 17.1×    │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 16      │ 45.8M          │ 1.1M          │ 40.7×    │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 32      │ 70.7M          │ 0.2M          │ 346×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 64      │ 101.5M         │ 0.2M          │ 592×     │
+└─────────┴────────────────┴───────────────┴──────────┘
 
-Baseline scales (lock operations are parallel). Lockdep collapses — even
-though there's no application-level contention, every lock/unlock
-funnels through g_meta_lock, making lockdep's internal state update
-fully serialized. This is the scalability bottleneck identified by the
-experiment.
+Baseline scales near-linearly (locks are independent, parallelism is
+effective). Lockdep throughput collapses with thread count despite zero
+application-level contention. The global g_meta_lock fully serializes
+all lockdep metadata updates, turning an embarrassingly parallel
+workload into a sequential one.
 
----
-What the experiment reveals
+--- What the Experiment Reveals ---
 
 The single global spinlock (g_meta_lock in state.c) protecting the
-dependency graph and slot registries is the root cause. When threads
-don't contend on application locks at all, lockdep's tracking overhead
-still serializes them completely — overhead scales with thread count,
-not with actual lock contention. This is the primary target for a
-ScaleLockDep improvement (e.g., per-lock or sharded metadata locks, or
-read-write locks for the dependency graph reads).
+dependency graph and slot registries is the root cause of the
+scalability failure. Overhead is not driven by lock contention in the
+target application — it is driven purely by thread count. This makes
+the current implementation unsuitable for workloads with many threads
+and fine-grained locking.
+
+The overhead factor grows super-linearly:
+  threads:  1    2    4    8    16   32    64
+  overhead: 4×   5×   7×   17×  41×  346×  592×
+
+Primary target for ScaleLockDep: replace g_meta_lock with finer-grained
+synchronization (e.g., per-lock-slot locks, sharded dependency graph, or
+read-write locks separating graph reads from writes).
