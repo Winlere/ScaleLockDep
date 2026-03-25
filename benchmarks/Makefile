@@ -8,7 +8,8 @@ SRCS = correct_40threads_3locks_10000iter.c \
        bench_overhead.c \
        bench_overhead_anylock.c \
        bench_overhead_anylock4.c \
-       bench_overhead_cslen.c
+       bench_overhead_cslen.c \
+       bench_latency.c
 
 BINS = $(SRCS:.c=.out)
 

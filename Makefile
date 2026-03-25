@@ -10,6 +10,7 @@ OVERHEAD_BIN     = benchmarks/bench_overhead.out
 ANYLOCK_BIN      = benchmarks/bench_overhead_anylock.out
 ANYLOCK4_BIN     = benchmarks/bench_overhead_anylock4.out
 CSLEN_BIN        = benchmarks/bench_overhead_cslen.out
+LATENCY_BIN      = benchmarks/bench_latency.out
 
 # Thread counts to sweep
 THREAD_COUNTS = 1 2 4 8 16 32 64
@@ -23,7 +24,7 @@ CS_LENGTHS = 0 10 20 30 50 75 100 150 200 300 500 750 1000 10000 100000
 # Threads for cslen experiment
 CSLEN_THREADS = 8
 
-.PHONY: all build run overhead overhead-anylock overhead-anylock4 overhead-cslen clean
+.PHONY: all build run overhead overhead-anylock overhead-anylock4 overhead-cslen latency clean
 
 all: build
 
@@ -32,7 +33,7 @@ build: $(LOCKDEP_LIB) $(BENCHMARKS)
 $(LOCKDEP_LIB):
 	$(MAKE) -C lockdep
 
-$(BENCHMARKS) $(OVERHEAD_BIN) $(ANYLOCK_BIN) $(ANYLOCK4_BIN) $(CSLEN_BIN):
+$(BENCHMARKS) $(OVERHEAD_BIN) $(ANYLOCK_BIN) $(ANYLOCK4_BIN) $(CSLEN_BIN) $(LATENCY_BIN):
 	$(MAKE) -C benchmarks
 
 # Run all benchmarks under lockdep; deadlock ones exit 66, correct ones exit 0.
@@ -145,6 +146,27 @@ overhead-cslen: build $(CSLEN_BIN)
 	@printf "threads\titers\tcs_ns\twall_ns\ttotal_ops\tops_per_sec\n"
 	@for cs in $(CS_LENGTHS); do \
 		LD_PRELOAD=./$(LOCKDEP_LIB) ./$(CSLEN_BIN) $(CSLEN_THREADS) $(ITERS) $$cs; \
+	done
+
+# ---------------------------------------------------------------------------
+# Latency experiment — per-operation lock/unlock delay
+#
+# Measures average nanoseconds per lock and per unlock call individually.
+# Sweep thread counts to show how contention affects per-op latency.
+# Columns: threads  iters  avg_lock_ns  avg_unlock_ns  avg_pair_ns
+# ---------------------------------------------------------------------------
+latency: build $(LATENCY_BIN)
+	@echo "=== Per-operation latency (1 shared lock) ==="
+	@echo "--- baseline (no lockdep) ---"
+	@printf "threads\titers\tavg_lock_ns\tavg_unlock_ns\tavg_pair_ns\n"
+	@for t in $(THREAD_COUNTS); do \
+		./$(LATENCY_BIN) $$t $(ITERS); \
+	done
+	@echo ""
+	@echo "--- with lockdep ---"
+	@printf "threads\titers\tavg_lock_ns\tavg_unlock_ns\tavg_pair_ns\n"
+	@for t in $(THREAD_COUNTS); do \
+		LD_PRELOAD=./$(LOCKDEP_LIB) ./$(LATENCY_BIN) $$t $(ITERS); \
 	done
 
 clean:
