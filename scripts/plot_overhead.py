@@ -175,7 +175,7 @@ ax.set_xticks(threads)
 ylo, yhi = ax.get_ylim()
 ax.set_ylim(ylo, yhi * 1.5)  # log scale: multiply for headroom
 
-fig.suptitle("Nodeadlock Overhead Microbenchmarks", fontsize=13, fontweight="bold", y=0.98)
+fig.suptitle("Overhead Microbenchmarks", fontsize=13, fontweight="bold", y=0.98)
 fig.tight_layout(rect=[0, 0, 1, 0.95])
 
 output = "plots/overhead_benchmarks.pdf"
