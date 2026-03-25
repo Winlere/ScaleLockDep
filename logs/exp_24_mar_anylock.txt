@@ -1,0 +1,131 @@
+Experiment: Overhead Microbenchmarks — 2-Lock Any-Acquire
+Date: 2026-03-18
+Commit ID: 9295d08
+
+--- Settings ---
+
+Machine
+  OS       : Linux archdell 6.19.6-arch1-1 x86_64
+  CPU      : 11th Gen Intel Core i7-11700 @ 2.50 GHz (8 cores / 16 threads)
+  Memory   : 16 GiB RAM
+
+Software
+  Compiler : gcc (flags: -Wall -Wextra -pthread)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : 9295d0832021633fef4cf138afc7030ff1d72a4f
+
+--- Parameters ---
+
+Benchmark binary : benchmarks/bench_overhead_anylock.out
+Invocation       : bench_overhead_anylock.out <num_threads> <iters_per_thread>
+Thread counts    : 1, 2, 4, 8, 16, 32, 64
+Iterations       : 100,000 per thread
+Metric           : ops_per_sec  (total acquisitions / wall time)
+
+Scenario
+  2 shared locks. Each iteration a thread acquires whichever lock is free:
+    1. pthread_mutex_trylock(lock[tid % 2])   — preferred lock (non-blocking)
+    2. pthread_mutex_trylock(lock[1-tid%2])   — alternate lock (non-blocking)
+    3. pthread_mutex_lock(lock[tid % 2])      — blocking fallback
+  Allows up to 2 threads to proceed concurrently (one per lock).
+  Differs from 1-lock high-contention: reduces serialization at the
+  application level, so lockdep overhead is more visible in isolation.
+
+Conditions
+  baseline : no LD_PRELOAD
+  lockdep  : LD_PRELOAD=./lockdep/liblockdep.so
+
+lockdep limits (lockdep.h)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+2-lock any-acquire — baseline
+threads  iters   wall_ns      total_ops  ops_per_sec
+1        100000  1663093      100000     60128928
+2        100000  13483785     200000     14832630
+4        100000  36807610     400000     10867318
+8        100000  76854673     800000     10409256
+16       100000  181280955    1600000    8826079
+32       100000  315885544    3200000    10130251
+64       100000  626429018    6400000    10216640
+
+2-lock any-acquire — with lockdep
+threads  iters   wall_ns      total_ops  ops_per_sec
+1        100000  5651752      100000     17693628
+2        100000  50695914     200000     3945091
+4        100000  125284092    400000     3192744
+8        100000  334257969    800000     2393361
+16       100000  774187972    1600000    2066682
+32       100000  1703019942   3200000    1879015
+64       100000  3026407733   6400000    2114718
+
+--- Key Findings ---
+
+2-lock any-acquire
+
+┌─────────┬────────────────┬───────────────┬──────────┐
+│ threads │ baseline ops/s │ lockdep ops/s │ overhead │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 1       │ 60.1M          │ 17.7M         │ 3.4×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 2       │ 14.8M          │ 3.9M          │ 3.8×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 4       │ 10.9M          │ 3.2M          │ 3.4×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 8       │ 10.4M          │ 2.4M          │ 4.3×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 16      │ 8.8M           │ 2.1M          │ 4.3×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 32      │ 10.1M          │ 1.9M          │ 5.4×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 64      │ 10.2M          │ 2.1M          │ 4.8×     │
+└─────────┴────────────────┴───────────────┴──────────┘
+
+--- Comparison with 1-Lock High-Contention (from exp_18_mar.txt) ---
+
+┌─────────┬──────────────────────┬──────────────────────┐
+│ threads │ overhead (1 lock)    │ overhead (2 locks)   │
+├─────────┼──────────────────────┼──────────────────────┤
+│ 1       │ 4.2×                 │ 3.4×                 │
+├─────────┼──────────────────────┼──────────────────────┤
+│ 2       │ 4.3×                 │ 3.8×                 │
+├─────────┼──────────────────────┼──────────────────────┤
+│ 4       │ 4.2×                 │ 3.4×                 │
+├─────────┼──────────────────────┼──────────────────────┤
+│ 8       │ 5.3×                 │ 4.3×                 │
+├─────────┼──────────────────────┼──────────────────────┤
+│ 16      │ 5.2×                 │ 4.3×                 │
+├─────────┼──────────────────────┼──────────────────────┤
+│ 32      │ 6.2×                 │ 5.4×                 │
+├─────────┼──────────────────────┼──────────────────────┤
+│ 64      │ 12.2×                │ 4.8×                 │
+└─────────┴──────────────────────┴──────────────────────┘
+
+--- What the Experiment Reveals ---
+
+1. Overhead is stable with 2 locks (3-5×) vs degrading with 1 lock (4-12×).
+   At 64 threads, 2-lock overhead is 4.8× vs 12.2× for 1 lock — a 2.5×
+   improvement. The extra lock halves the application-level serialization,
+   giving threads more opportunity to proceed without all queuing behind
+   g_meta_lock.
+
+2. Baseline throughput is lower for 2 locks than 1 lock (~10M vs ~15M
+   ops/sec at ≥2 threads). The two trylock attempts before the blocking
+   fallback add syscall overhead even when locks are uncontended; the 1-lock
+   baseline avoids this by going straight to pthread_mutex_lock.
+
+3. Lockdep throughput at ≥2 threads converges around 2-4M ops/sec
+   regardless of thread count — the g_meta_lock spinlock caps throughput
+   at roughly one lockdep metadata update per ~250-500ns. The 2-lock case
+   does not eliminate this ceiling; it merely reaches it more gracefully
+   because the application-level blocking is less severe.
+
+4. The flat lockdep curve (no collapse at 32/64 threads unlike the
+   low-contention case) confirms: the catastrophic overhead in low-contention
+   multi-lock experiments is driven by both g_meta_lock AND the absence of
+   any application-level throttling. Here, the 2 shared locks act as a
+   natural rate limiter that prevents all threads from hammering g_meta_lock
+   simultaneously.
