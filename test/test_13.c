@@ -1,10 +1,13 @@
 /*
- * TEST 13: Dubious Dynamic Lock Selection
- * Category: DUBIOUS NON-DEADLOCK
- * Description: Lock acquisition order is determined dynamically based on thread ID.
- * Works correctly if the ID-based ordering happens to prevent cycles,
- * but is fragile and not obviously safe.
- * Expected: May complete (if ID ordering prevents deadlock)
+ * TEST 13: Dubious Role-Based Lock Order
+ * Category: DUBIOUS
+ * Description: Each thread is assigned a "role" by its ID (mod 3), giving it a
+ *   fixed pair of locks to acquire.  The code looks disciplined — no randomness,
+ *   each thread has a clear, predictable responsibility.  A reviewer might reason
+ *   "every thread has a consistent order, so there can be no cycle."  But the
+ *   three roles collectively form a closed cycle: A→B (role 0), B→C (role 1),
+ *   C→A (role 2).  The graph-level cycle is unambiguous; lockdep will catch it.
+ * Expected: DEADLOCK detected (A→B→C→A cycle in the lock graph)
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -18,9 +21,7 @@ void* worker(void* arg) {
     long tid = (long)arg;
 
     for (int i = 0; i < 30; i++) {
-        // Dynamically select lock order based on thread ID
-        // This creates an implicit total order that might prevent deadlock
-        // But it's not obvious or maintainable
+        /* Role assigned by thread ID — looks like a clean total order */
         if (tid % 3 == 0) {
             pthread_mutex_lock(&A);
             usleep(5000);
@@ -47,11 +48,11 @@ void* worker(void* arg) {
 
 int main(void) {
     pthread_t t1, t2, t3;
-    pthread_create(&t1, NULL, worker, (void*)0);
-    pthread_create(&t2, NULL, worker, (void*)1);
-    pthread_create(&t3, NULL, worker, (void*)2);
-
+    pthread_create(&t1, NULL, worker, (void*)0L);
+    pthread_create(&t2, NULL, worker, (void*)1L);
+    pthread_create(&t3, NULL, worker, (void*)2L);
+    /* Lockdep exits early (rc=66) when it detects the A->B->C->A cycle */
     sleep(2);
-    printf("Test 13: DUBIOUS DYNAMIC (may or may not deadlock based on thread interleaving)\n");
+    printf("Test 13: completed without deadlock detection\n");
     return 0;
 }

@@ -19,7 +19,7 @@ TIMEOUT=5   # seconds; real deadlocks hang; lockdep may detect early (exit 66)
 declare -A GROUND_TRUTH=(
   [test_01]=0  [test_02]=0  [test_03]=0  [test_04]=0  [test_05]=0  [test_06]=0
   [test_07]=1  [test_08]=1  [test_09]=1  [test_10]=1
-  [test_11]=1  [test_12]=0  [test_13]=0
+  [test_11]=1  [test_12]=0  [test_13]=1
   [test_14]=1  [test_15]=1  [test_16]=1
 )
 
