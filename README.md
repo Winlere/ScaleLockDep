@@ -1,4 +1,4 @@
-# Nodeadlock
+# ScaleLockDep
 
-Nodeadlock is a transparent, high-performance and user space dead lock detector. 
+ScaleLockDep is a scalable, transparent and user space dead lock detector. 
 
