@@ -1,28 +1,45 @@
 #include "lockdep.h"
 
+static int lockdep_try_lookup_top_held_lock_slot(pthread_mutex_t *mutex, int *lock_slot_out) {
+    int held_lock_slot_count = tls_thread_state.held_lock_slot_count;
+
+    if (held_lock_slot_count == 0) {
+        return 0;
+    }
+
+    int top_lock_slot = tls_thread_state.held_lock_slots[held_lock_slot_count - 1];
+
+    if (g_lock_slots[top_lock_slot].addr != mutex) {
+        return 0;
+    }
+
+    *lock_slot_out = top_lock_slot;
+    return 1;
+}
+
 /**
  * Collect the actual wait-for chain starting from
  * Tself -> Ltarget -> Towner -> ...
- * Caller must hold g_meta_lock.
- *
  * thread_chain[0] is the current thread slot.
  * For each edge i:
  *   thread_chain[i] -> lock_chain[i] -> thread_chain[i + 1]
  *
  * @return 1 if the chain closes back to the current thread, 0 otherwise.
  */
-static int lockdep_collect_actual_deadlock_chain_locked(int self_thread_slot,
-                                                        int target_lock_slot,
-                                                        int *thread_chain,
-                                                        int *lock_chain,
-                                                        int *edge_count_out) {
+static int lockdep_collect_actual_deadlock_chain(int self_thread_slot,
+                                                 int target_lock_slot,
+                                                 int *thread_chain,
+                                                 int *lock_chain,
+                                                 int *edge_count_out) {
     int edge_count = 0;
     int current_lock_slot = target_lock_slot;
 
     thread_chain[0] = self_thread_slot;
 
     while (edge_count < LOCKDEP_MAX_THREAD_SLOTS) {
-        int owner_thread_slot = g_lock_slots[current_lock_slot].owner_thread_slot;
+        int owner_thread_slot = atomic_load_explicit(
+            &g_lock_slots[current_lock_slot].owner_thread_slot,
+            memory_order_acquire);
         if (owner_thread_slot == LOCKDEP_INVALID_SLOT) {
             *edge_count_out = edge_count;
             return 0;
@@ -37,7 +54,9 @@ static int lockdep_collect_actual_deadlock_chain_locked(int self_thread_slot,
             return 1;
         }
 
-        current_lock_slot = g_thread_slots[owner_thread_slot].waiting_on_lock_slot;
+        current_lock_slot = atomic_load_explicit(
+            &g_thread_slots[owner_thread_slot].waiting_on_lock_slot,
+            memory_order_acquire);
         if (current_lock_slot == LOCKDEP_INVALID_SLOT) {
             *edge_count_out = edge_count;
             return 0;
@@ -54,21 +73,21 @@ static int lockdep_collect_actual_deadlock_chain_locked(int self_thread_slot,
  * @return 1 if an actual deadlock is detected, 0 otherwise.
  */
 int lockdep_before_blocking_mutex_lock(pthread_mutex_t *mutex) {
-    int self_thread_slot = lockdep_get_or_register_thread_slot();
-    int target_lock_slot = lockdep_lookup_or_create_lock_slot(mutex);
+    int self_thread_slot = lockdep_current_thread_slot();
+    int target_lock_slot = lockdep_lookup_or_create_lock_slot_cached_fast(mutex);
     int thread_chain[LOCKDEP_MAX_THREAD_SLOTS + 1];
     int lock_chain[LOCKDEP_MAX_THREAD_SLOTS];
     int edge_count = 0;
-    int found_deadlock = 0;
+    int found_deadlock;
 
-    lockdep_meta_lock();
-    g_thread_slots[self_thread_slot].waiting_on_lock_slot = target_lock_slot;
-    found_deadlock = lockdep_collect_actual_deadlock_chain_locked(self_thread_slot,
-                                                                  target_lock_slot,
-                                                                  thread_chain,
-                                                                  lock_chain,
-                                                                  &edge_count);
-    lockdep_meta_unlock();
+    atomic_store_explicit(&g_thread_slots[self_thread_slot].waiting_on_lock_slot,
+                          target_lock_slot,
+                          memory_order_release);
+    found_deadlock = lockdep_collect_actual_deadlock_chain(self_thread_slot,
+                                                           target_lock_slot,
+                                                           thread_chain,
+                                                           lock_chain,
+                                                           &edge_count);
 
     if (found_deadlock) {
         lockdep_report_actual_deadlock(thread_chain, lock_chain, edge_count);
@@ -82,11 +101,11 @@ int lockdep_before_blocking_mutex_lock(pthread_mutex_t *mutex) {
  * Clear waiting state for the current thread.
  */
 void lockdep_cancel_wait(void) {
-    int self_thread_slot = lockdep_get_or_register_thread_slot();
+    int self_thread_slot = lockdep_current_thread_slot();
 
-    lockdep_meta_lock();
-    g_thread_slots[self_thread_slot].waiting_on_lock_slot = LOCKDEP_INVALID_SLOT;
-    lockdep_meta_unlock();
+    atomic_store_explicit(&g_thread_slots[self_thread_slot].waiting_on_lock_slot,
+                          LOCKDEP_INVALID_SLOT,
+                          memory_order_release);
 }
 
 /**
@@ -94,39 +113,39 @@ void lockdep_cancel_wait(void) {
  * Potential deadlock tracking uses the global dependency graph.
  * Actual deadlock tracking uses owner/waiting state.
  */
-void lockdep_acquire_mutex(pthread_mutex_t *mutex, int via_trylock) {
-    (void)via_trylock;
+void lockdep_acquire_mutex(pthread_mutex_t *mutex, int clear_wait_state) {
+    int self_thread_slot = lockdep_current_thread_slot();
+    int new_lock_slot = lockdep_lookup_or_create_lock_slot_cached_fast(mutex);
+    int held_lock_slot_count = tls_thread_state.held_lock_slot_count;
 
-    int self_thread_slot = lockdep_get_or_register_thread_slot();
-    int new_lock_slot = lockdep_lookup_or_create_lock_slot(mutex);
-
-    /* Show the held set before pushing the new lock slot. */
-    lockdep_log_held_lock_slots(new_lock_slot);
-
-    /* For each currently held lock slot H, record dependency H -> new_lock_slot. */
-    for (int i = 0; i < tls_thread_state.held_lock_slot_count; i++) {
-        lockdep_add_edge_and_check_cycle(tls_thread_state.held_lock_slots[i],
-                                         new_lock_slot);
+    if (held_lock_slot_count == 0) {
+        tls_thread_state.held_lock_slots[0] = new_lock_slot;
+        tls_thread_state.held_lock_slot_count = 1;
+    } else {
+        lockdep_debug_log_held_lock_slots(new_lock_slot);
+        lockdep_potential_on_acquire(self_thread_slot, new_lock_slot, &tls_thread_state);
+        lockdep_push_held_lock_slot(new_lock_slot);
     }
-
-    /* Update the current thread's held-lock stack. */
-    lockdep_push_held_lock_slot(new_lock_slot);
-
-    /* Update runtime ownership / waiting state. */
-    lockdep_meta_lock();
-    g_thread_slots[self_thread_slot].waiting_on_lock_slot = LOCKDEP_INVALID_SLOT;
-    g_lock_slots[new_lock_slot].owner_thread_slot = self_thread_slot;
-    lockdep_meta_unlock();
+    if (clear_wait_state) {
+        atomic_store_explicit(&g_thread_slots[self_thread_slot].waiting_on_lock_slot,
+                              LOCKDEP_INVALID_SLOT,
+                              memory_order_release);
+    }
+    atomic_store_explicit(&g_lock_slots[new_lock_slot].owner_thread_slot,
+                          self_thread_slot,
+                          memory_order_release);
 }
 
 /**
  * Release a mutex and update lockdep state.
  */
 void lockdep_release_mutex(pthread_mutex_t *mutex) {
-    int self_thread_slot = lockdep_get_or_register_thread_slot();
+    int self_thread_slot = lockdep_current_thread_slot();
     int lock_slot;
+    int held_lock_slot_count = tls_thread_state.held_lock_slot_count;
 
-    if (!lockdep_lookup_lock_slot(mutex, &lock_slot)) {
+    if (!lockdep_try_lookup_top_held_lock_slot(mutex, &lock_slot) &&
+        !lockdep_lookup_lock_slot_cached_fast(mutex, &lock_slot)) {
         dprintf(2,
                 "[LOCKDEP] warning: unlock unknown mutex=%p tid=%d\n",
                 (void *)mutex,
@@ -134,12 +153,21 @@ void lockdep_release_mutex(pthread_mutex_t *mutex) {
         return;
     }
 
-    lockdep_meta_lock();
-    if (g_lock_slots[lock_slot].owner_thread_slot == self_thread_slot) {
-        g_lock_slots[lock_slot].owner_thread_slot = LOCKDEP_INVALID_SLOT;
+    int expected_owner_thread_slot = self_thread_slot;
+    atomic_compare_exchange_strong_explicit(&g_lock_slots[lock_slot].owner_thread_slot,
+                                            &expected_owner_thread_slot,
+                                            LOCKDEP_INVALID_SLOT,
+                                            memory_order_acq_rel,
+                                            memory_order_acquire);
+
+    if (g_lockdep_mode == LOCKDEP_MODE_RB && lockdep_potential_thread_tracking_active()) {
+        lockdep_potential_on_release(self_thread_slot, lock_slot, &tls_thread_state);
     }
-    g_thread_slots[self_thread_slot].waiting_on_lock_slot = LOCKDEP_INVALID_SLOT;
-    lockdep_meta_unlock();
+
+    if (held_lock_slot_count == 1 && tls_thread_state.held_lock_slots[0] == lock_slot) {
+        tls_thread_state.held_lock_slot_count = 0;
+        return;
+    }
 
     lockdep_remove_held_lock_slot(lock_slot);
 }

@@ -10,8 +10,9 @@ void lockdep_panic(const char *msg) {
 
 static void lockdep_print_lock_slot(int lock_slot) {
     pthread_mutex_t *addr = NULL;
+    int lock_slot_count = atomic_load_explicit(&g_lock_slot_count, memory_order_acquire);
 
-    if (lock_slot >= 0 && lock_slot < g_lock_slot_count) {
+    if (lock_slot >= 0 && lock_slot < lock_slot_count) {
         addr = g_lock_slots[lock_slot].addr;
     }
 
@@ -20,8 +21,9 @@ static void lockdep_print_lock_slot(int lock_slot) {
 
 static void lockdep_print_thread_slot(int thread_slot) {
     pid_t tid = -1;
+    int thread_slot_count = atomic_load_explicit(&g_thread_slot_count, memory_order_acquire);
 
-    if (thread_slot >= 0 && thread_slot < g_thread_slot_count) {
+    if (thread_slot >= 0 && thread_slot < thread_slot_count) {
         tid = g_thread_slots[thread_slot].tid;
     }
 

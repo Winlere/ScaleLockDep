@@ -5,10 +5,35 @@
  * g_dependency_graph[u][v] == 1 means an observed dependency edge Lu -> Lv.
  */
 static uint8_t g_dependency_graph[LOCKDEP_MAX_LOCK_SLOTS][LOCKDEP_MAX_LOCK_SLOTS] = {{0}};
+static _Atomic uint64_t
+    g_dependency_predecessor_bits[LOCKDEP_MAX_LOCK_SLOTS][(LOCKDEP_MAX_LOCK_SLOTS + 63) / 64];
 
 /* Optional small stats for debugging / future summary. */
 static int g_dependency_edge_count = 0;
 static int g_dependency_cycle_count = 0;
+
+static inline int lockdep_global_bit_test(_Atomic uint64_t *bits, int lock_slot) {
+    uint64_t word = atomic_load_explicit(&bits[lock_slot / 64], memory_order_acquire);
+    return (word & (1ULL << (lock_slot % 64))) != 0;
+}
+
+int lockdep_global_has_unknown_predecessor(const lockdep_thread_state_t *thread_state,
+                                           int new_lock_slot) {
+    for (int i = 0; i < thread_state->held_lock_slot_count; i++) {
+        int held_lock_slot = thread_state->held_lock_slots[i];
+
+        if (held_lock_slot == new_lock_slot) {
+            continue;
+        }
+
+        if (!lockdep_global_bit_test(g_dependency_predecessor_bits[new_lock_slot],
+                                     held_lock_slot)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
 
 /**
  * DFS helper to find whether target_lock_slot is reachable from cur_lock_slot.
@@ -19,13 +44,15 @@ static int lockdep_find_path_locked(int cur_lock_slot,
                                     int target_lock_slot,
                                     int visited[LOCKDEP_MAX_LOCK_SLOTS],
                                     int parent[LOCKDEP_MAX_LOCK_SLOTS]) {
+    int lock_slot_count = atomic_load_explicit(&g_lock_slot_count, memory_order_acquire);
+
     if (cur_lock_slot == target_lock_slot) {
         return 1;
     }
 
     visited[cur_lock_slot] = 1;
 
-    for (int next_lock_slot = 0; next_lock_slot < g_lock_slot_count; next_lock_slot++) {
+    for (int next_lock_slot = 0; next_lock_slot < lock_slot_count; next_lock_slot++) {
         if (g_dependency_graph[cur_lock_slot][next_lock_slot] && !visited[next_lock_slot]) {
             parent[next_lock_slot] = cur_lock_slot;
             if (lockdep_find_path_locked(next_lock_slot,
@@ -94,6 +121,9 @@ void lockdep_add_edge_and_check_cycle(int from_lock_slot, int to_lock_slot) {
         }
 
         g_dependency_graph[from_lock_slot][to_lock_slot] = 1;
+        atomic_fetch_or_explicit(&g_dependency_predecessor_bits[to_lock_slot][from_lock_slot / 64],
+                                 1ULL << (from_lock_slot % 64),
+                                 memory_order_release);
         g_dependency_edge_count++;
     }
 
