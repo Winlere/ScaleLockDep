@@ -1,0 +1,186 @@
+Experiment: Overhead Microbenchmarks
+Date: 2026-04-20
+Commit ID: f760bcd
+
+--- Settings ---
+
+Machine
+  OS       : Linux archdell 6.19.11-arch1-1 x86_64
+  CPU      : 11th Gen Intel Core i7-11700 @ 2.50 GHz (8 cores / 16 threads)
+  Memory   : 16 GiB RAM
+
+Software
+  Compiler : gcc (flags: -Wall -Wextra -pthread)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : f760bcd6ca2745dfe8ad27b04bab87436f7eb5a0
+
+--- Parameters ---
+
+Benchmark binary : benchmarks/bench_overhead.out
+Invocation       : bench_overhead.out <num_threads> <num_locks> <iters_per_thread>
+Thread counts    : 1, 2, 4, 8, 16, 32, 64
+Iterations       : 100,000 per thread
+Metric           : lock_ops_per_sec  (total lock/unlock pairs / wall time)
+
+Scenarios
+  high-contention : num_locks = 1           (all threads share one lock)
+  low-contention  : num_locks = num_threads  (each thread owns its own lock,
+                                              isolates lockdep tracking overhead
+                                              from application synchronization)
+
+Conditions per scenario
+  baseline : no LD_PRELOAD
+  lockdep  : LD_PRELOAD=./lockdep/liblockdep.so
+
+lockdep limits (lockdep.h)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+High-contention (1 shared lock) — baseline
+threads  locks  iters   wall_ns       total_ops  ops_per_sec
+1        1      100000  1362772       100000     73379846
+2        1      100000  11447541      200000     17471001
+4        1      100000  23188798      400000     17249708
+8        1      100000  41714474      800000     19177996
+16       1      100000  103385060     1600000    15476124
+32       1      100000  217303397     3200000    14725955
+64       1      100000  434409562     6400000    14732641
+
+High-contention (1 shared lock) — with lockdep
+threads  locks  iters   wall_ns       total_ops  ops_per_sec
+1        1      100000  2882103       100000     34696886
+2        1      100000  19701228      200000     10151651
+4        1      100000  40952263      400000     9767470
+8        1      100000  108531093     800000     7371160
+16       1      100000  243995611     1600000    6557495
+32       1      100000  484646237     3200000    6602754
+64       1      100000  964661551     6400000    6634451
+
+Low-contention (num_locks = num_threads) — baseline
+threads  locks  iters   wall_ns       total_ops  ops_per_sec
+1        1      100000  1338677       100000     74700619
+2        2      100000  21622155      400000     18499544
+4        4      100000  75288338      1600000    21251631
+8        8      100000  224886778     6400000    28458765
+16       16     100000  561768634     25600000   45570362
+32       32     100000  1445819022    102400000  70824909
+64       64     100000  4005976195    409600000  102247238
+
+Low-contention (num_locks = num_threads) — with lockdep
+threads  locks  iters   wall_ns         total_ops  ops_per_sec
+1        1      100000  2871747         100000     34822009
+2        2      100000  40413928        400000     9897578
+4        4      100000  115149090       1600000    13895029
+8        8      100000  374131324       6400000    17106293
+16       16     100000  852212668       25600000   30039450
+32       32     100000  2327504256      102400000  43995623
+64       64     100000  6739757455      409600000  60773700
+
+--- Key Findings ---
+
+High contention (1 shared lock)
+
+┌─────────┬────────────────┬───────────────┬──────────┐
+│ threads │ baseline ops/s │ lockdep ops/s │ overhead │
+├─────────┼────────────────��───────────────┼──────���───┤
+│ 1       │ 73.4M          │ 34.7M         │ 2.1×     │
+├─────────┼────────────────���───────────────┼──────────┤
+│ 2       �� 17.5M          ��� 10.2M         │ 1.7×     │
+├───────���─┼───��────────────┼──────────��────┼──────────┤
+│ 4       │ 17.2M          │ 9.8M          │ 1.8×     │
+├─────────┼───��────────────┼───────────────┼─────────���┤
+│ 8       │ 19.2M          │ 7.4M          │ 2.6×     │
+├─────��───┼��───────────────┼───────────────┼────────��─┤
+│ 16      │ 15.5M          │ 6.6M          │ 2.4×     │
+├─────────┼────────────────┼─���─────────────┼──────────┤
+│ 32      │ 14.7M          │ 6.6M          ��� 2.2×     ���
+├─────────┼────────────────┼─────��─────────┼──────────┤
+│ 64      �� 14.7M          │ 6.6M          �� 2.2×     │
+└─────────┴────────────────┴──────────���────┴──────────┘
+
+Low contention (each thread owns its own lock)
+
+┌─��───────┬──────────���─────┬───────────────┬─��────────┐
+│ threads │ baseline ops/s │ lockdep ops/s │ overhead │
+��─────���───┼────────────────┼───────���───────┼──────────┤
+│ 1       │ 74.7M          │ 34.8M         │ 2.1×     │
+├─────────┼─────���──────────┼─────��─────────┼──────────��
+│ 2       │ 18.5M          │ 9.9M          │ 1.9×     │
+├───���─────┼─────��──────────┼─────────��─────┼────────���─┤
+│ 4       │ 21.3M          │ 13.9M         │ 1.5×     │
+├─────────┼────────��───────┼───��───────────┼──────────┤
+�� 8       │ 28.5M          │ 17.1M         │ 1.7×     │
+├─────────┼───────��────────┼───────────────┼──────���───┤
+│ 16      │ 45.6M          │ 30.0M         │ 1.5×     │
+├─────────┼─────────���──────┼��──────────────┼──────────┤
+│ 32      │ 70.8M          │ 44.0M         │ 1.6×     │
+├─────────┼───��────────────┼───────────────┼──────────┤
+�� 64      │ 102.2M         │ 60.8M         │ 1.7×     │
+└─────────┴─────────���──────┴───────���───────┴──────────┘
+
+--- Comparison with exp_18_mar (commit 9295d08) ---
+
+High contention overhead
+
+┌────���────┬───────────────────┬───────────────────┐
+│ threads │ overhead (Mar 18) │ overhead (Apr 20) │
+├─────────┼───────────────────┼───────────────────┤
+│ 1       │ 4.2×              │ 2.1×              │
+├────��────┼─────���─────────────┼───────────────────┤
+│ 2       │ 4.3×              │ 1.7×              │
+├─────────┼──────────���────────┼───────────────────┤
+��� 4       │ 4.2×              │ 1.8×              │
+├─────────┼───────��───────────┼──────���────────────┤
+│ 8       │ 5.3×              │ 2.6×              ��
+├─────────┼─────────────────���─┼───────────────────┤
+│ 16      │ 5.2×              │ 2.4×              ��
+├─────────┼───────────────────┼───────────────────┤
+│ 32      │ 6.2×              │ 2.2×              │
+├─────────┼───────────���───────��───────────────────┤
+│ 64      │ 12.2×             │ 2.2×              │
+└─────────���───────────────────┴────────────��──────┘
+
+Low contention overhead
+
+┌─────────┬───────────────────┬───────────────────┐
+│ threads │ overhead (Mar 18) │ overhead (Apr 20) │
+���─────────┼───────────────────┼─────────────���─────┤
+│ 1       │ 4.1×              │ 2.1×              │
+├─────────┼──────��────────────┼───��───────────────┤
+│ 2       │ 4.9×              │ 1.9×              │
+├─────────┼───────────────────┼───────────────────┤
+│ 4       │ 7.1×              �� 1.5×              │
+├─────────┼──────��────────────┼──���────────────────┤
+│ 8       │ 17.1×             │ 1.7×              ���
+├─────────┼─────���─────────────┼───────────────────┤
+�� 16      │ 40.7×             │ 1.5×              │
+├─────────┼─��─────────────────┼───���───────────────┤
+│ 32      │ 346×              │ 1.6×              │
+├─────────┼─���─────────────────┼───────────────────┤
+│ 64      │ 592×              │ 1.7×              ���
+└─────────┴─────────��─────────┴────────���──────────┘
+
+--- What the Experiment Reveals ---
+
+1. High contention overhead is now 1.7–2.6× across all thread counts,
+   compared to 4.2–12.2× previously. The catastrophic 12.2× at 64 threads
+   is eliminated — overhead is flat at ~2.2× for ≥32 threads.
+
+2. Low contention overhead is the headline result: the previous
+   implementation collapsed from 4× at 1 thread to 592× at 64 threads.
+   The per-thread RB implementation holds at 1.5–2.1× across all thread
+   counts. The 592× → 1.7× improvement at 64 threads is a 348× reduction
+   in overhead ratio.
+
+3. Lockdep now scales with thread count in the low-contention scenario:
+   34.8M ops/s at 1 thread → 60.8M at 64 threads. The previous
+   implementation went from 17.4M → 0.2M (anti-scaling). This confirms
+   that the per-thread RB backend eliminates the g_meta_lock serialization
+   that was the root cause of the scalability failure.
+
+4. At 1 thread (uncontended), lockdep throughput doubled: 17.7M → 34.7M
+   ops/s. The per-operation fixed cost dropped from ~56 ns to ~29 ns,
+   matching the latency experiment findings.

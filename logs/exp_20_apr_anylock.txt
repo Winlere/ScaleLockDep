@@ -1,0 +1,136 @@
+Experiment: Overhead Microbenchmarks — 2-Lock Any-Acquire
+Date: 2026-04-20
+Commit ID: f760bcd
+
+--- Settings ---
+
+Machine
+  OS       : Linux archdell 6.19.11-arch1-1 x86_64
+  CPU      : 11th Gen Intel Core i7-11700 @ 2.50 GHz (8 cores / 16 threads)
+  Memory   : 16 GiB RAM
+
+Software
+  Compiler : gcc (flags: -Wall -Wextra -pthread)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : f760bcd6ca2745dfe8ad27b04bab87436f7eb5a0
+
+--- Parameters ---
+
+Benchmark binary : benchmarks/bench_overhead_anylock.out
+Invocation       : bench_overhead_anylock.out <num_threads> <iters_per_thread>
+Thread counts    : 1, 2, 4, 8, 16, 32, 64
+Iterations       : 100,000 per thread
+Metric           : ops_per_sec  (total acquisitions / wall time)
+
+Scenario
+  2 shared locks. Each iteration a thread acquires whichever lock is free:
+    1. pthread_mutex_trylock(lock[tid % 2])   — preferred lock (non-blocking)
+    2. pthread_mutex_trylock(lock[1-tid%2])   — alternate lock (non-blocking)
+    3. pthread_mutex_lock(lock[tid % 2])      — blocking fallback
+  Allows up to 2 threads to proceed concurrently (one per lock).
+  Differs from 1-lock high-contention: reduces serialization at the
+  application level, so lockdep overhead is more visible in isolation.
+
+Conditions
+  baseline : no LD_PRELOAD
+  lockdep  : LD_PRELOAD=./lockdep/liblockdep.so
+
+lockdep limits (lockdep.h)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+2-lock any-acquire — baseline
+threads  iters   wall_ns      total_ops  ops_per_sec
+1        100000  1948365      100000     51325085
+2        100000  10921861     200000     18311898
+4        100000  36279075     400000     11025639
+8        100000  76148579     800000     10505777
+16       100000  174320308    1600000    9178506
+32       100000  320474183    3200000    9985204
+64       100000  637898722    6400000    10032941
+
+2-lock any-acquire — with lockdep
+threads  iters   wall_ns      total_ops  ops_per_sec
+1        100000  2862343      100000     34936414
+2        100000  21108360     200000     9474919
+4        100000  47944729     400000     8342940
+8        100000  113108646    800000     7072846
+16       100000  241771317    1600000    6617824
+32       100000  511433281    3200000    6256926
+64       100000  1009959774   6400000    6336886
+
+--- Key Findings ---
+
+2-lock any-acquire
+
+┌─────────┬────────────────┬───────────────┬──────────┐
+│ threads │ baseline ops/s │ lockdep ops/s │ overhead │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 1       │ 51.3M          │ 34.9M         │ 1.5×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 2       │ 18.3M          │ 9.5M          │ 1.9×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 4       │ 11.0M          │ 8.3M          │ 1.3×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 8       │ 10.5M          │ 7.1M          │ 1.5×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 16      │ 9.2M           │ 6.6M          │ 1.4×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 32      │ 10.0M          │ 6.3M          │ 1.6×     │
+├─────────┼────────────────┼───────────────┼──────────┤
+│ 64      │ 10.0M          │ 6.3M          │ 1.6×     │
+└─────────┴────────────────┴───────────────┴──────────┘
+
+--- Comparison with exp_24_mar (commit 9295d08) ---
+
+��─────────┬───────────────────────────────┬───────────────────────────────┐
+│         │    Mar 24 (9295d08)           │    Apr 20 (f760bcd)           │
+│ threads ├───────────────┬───────────────┼───────────────┬───────────────┤
+│         │ lockdep ops/s │ overhead      │ lockdep ops/s │ overhead      │
+├─────────┼───────────────┼───────────────┼───────────────┼───────────────┤
+│ 1       │ 17.7M         │ 3.4×          │ 34.9M         │ 1.5×          │
+├─────────┼───────────────┼───────────────┼───────────────┼───────────────┤
+│ 2       │ 3.9M          │ 3.8×          │ 9.5M          │ 1.9×          │
+├─────────┼───────────────┼───────────────┼───────────────┼───────────────┤
+│ 4       │ 3.2M          │ 3.4×          │ 8.3M          │ 1.3×          │
+├─────────┼───────────────┼───────────────┼───────────────┼───────────────┤
+│ 8       │ 2.4M          │ 4.3×          │ 7.1M          │ 1.5×          │
+├─────────┼───────────────┼───────────────┼───────────────┼───────────────┤
+│ 16      │ 2.1M          │ 4.3×          │ 6.6M          │ 1.4×          │
+├─────────┼───────────────┼───────────────┼───────────────┼───────────────┤
+│ 32      │ 1.9M          │ 5.4×          │ 6.3M          │ 1.6×          │
+├─────────┼───────────────┼───────────────┼───────────────┼───────────────┤
+│ 64      │ 2.1M          │ 4.8×          │ 6.3M          │ 1.6×          │
+└─────────┴───────────────┴───────────────┴───────────────┴───────────────┘
+
+--- What the Experiment Reveals ---
+
+1. The per-thread RB implementation (f760bcd) reduces 2-lock any-acquire
+   overhead from 3.4–5.4× to 1.3–1.9× across all thread counts. This is
+   a 2–3× improvement in overhead ratio at every data point.
+
+2. Lockdep throughput improved dramatically: at 8 threads, 2.4M → 7.1M
+   ops/s (3.0× faster). At 64 threads, 2.1M → 6.3M ops/s (3.0× faster).
+   The per-thread RB backend removes the g_meta_lock serialization that
+   previously capped lockdep throughput at ~2-4M ops/s.
+
+3. Lockdep throughput now stabilizes around 6-7M ops/s at ≥4 threads,
+   compared to ~2M ops/s previously. The higher ceiling indicates that
+   the per-thread architecture has shifted the bottleneck from metadata
+   contention to application-level lock contention.
+
+4. The overhead curve is now flat (1.3–1.9×) across 1–64 threads. The
+   previous implementation showed degrading overhead at high thread counts
+   (3.4× at 1 thread → 5.4× at 32 threads). The new implementation
+   eliminates the thread-count-dependent overhead growth.
+
+5. At 1 thread, lockdep throughput nearly doubled (17.7M → 34.9M ops/s),
+   confirming reduced per-operation fixed cost even without contention.
+
+Overhead summary:
+  threads:    1     2     4     8     16    32    64
+  Mar 24:     3.4×  3.8×  3.4×  4.3×  4.3×  5.4×  4.8×
+  Apr 20:     1.5×  1.9×  1.3×  1.5×  1.4×  1.6×  1.6×
