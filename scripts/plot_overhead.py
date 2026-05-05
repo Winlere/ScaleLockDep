@@ -3,14 +3,17 @@
 # dependencies = ["matplotlib"]
 # ///
 """
-Visualize overhead benchmark results from logs/exp_18_mar.txt.
+Visualize overhead benchmark results from an experiment log.
 
 Usage:
-    uv run scripts/plot_overhead.py
+    uv run scripts/plot_overhead.py [LOG_FILE]
+
+Defaults to logs/exp_18_mar.txt if no argument is given.
 """
 
 import os
 import re
+import sys
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
@@ -60,7 +63,8 @@ def column(table, name):
 
 # --- Load data ---
 
-tables = parse_tables("logs/exp_18_mar.txt")
+log_file = sys.argv[1] if len(sys.argv) > 1 else "logs/exp_18_mar.txt"
+tables = parse_tables(log_file)
 
 hi_base_tbl = tables[TABLE_HEADERS[0]]
 hi_lock_tbl = tables[TABLE_HEADERS[1]]
@@ -178,7 +182,8 @@ ax.set_ylim(ylo, yhi * 1.5)  # log scale: multiply for headroom
 fig.suptitle("Overhead Microbenchmarks", fontsize=13, fontweight="bold", y=0.98)
 fig.tight_layout(rect=[0, 0, 1, 0.95])
 
-output = "plots/overhead_benchmarks.pdf"
 os.makedirs("plots", exist_ok=True)
+basename = os.path.splitext(os.path.basename(log_file))[0]
+output = f"plots/{basename}.pdf"
 fig.savefig(output, bbox_inches="tight")
 print(f"Saved to {output}")
