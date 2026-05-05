@@ -153,6 +153,7 @@ void lockdep_push_held_lock_slot(int lock_slot) {
     }
 
     tls_thread_state.held_lock_slots[tls_thread_state.held_lock_slot_count++] = lock_slot;
+    lockdep_note_thread_holds_lock_slot(lock_slot);
 }
 
 /**
@@ -165,6 +166,7 @@ void lockdep_remove_held_lock_slot(int lock_slot) {
     if (held_lock_slot_count > 0 &&
         tls_thread_state.held_lock_slots[held_lock_slot_count - 1] == lock_slot) {
         tls_thread_state.held_lock_slot_count--;
+        lockdep_note_thread_releases_lock_slot(lock_slot);
         return;
     }
 
@@ -174,6 +176,7 @@ void lockdep_remove_held_lock_slot(int lock_slot) {
                 tls_thread_state.held_lock_slots[j] = tls_thread_state.held_lock_slots[j + 1];
             }
             tls_thread_state.held_lock_slot_count--;
+            lockdep_note_thread_releases_lock_slot(lock_slot);
             return;
         }
     }

@@ -10,14 +10,27 @@
 #include <unistd.h>
 
 /* Parameters */
+#ifndef LOCKDEP_MAX_LOCK_SLOTS
 #define LOCKDEP_MAX_LOCK_SLOTS 256
+#endif
+#ifndef LOCKDEP_MAX_HELD_LOCK_SLOTS
 #define LOCKDEP_MAX_HELD_LOCK_SLOTS 64
+#endif
+#ifndef LOCKDEP_MAX_THREAD_SLOTS
 #define LOCKDEP_MAX_THREAD_SLOTS 128
+#endif
+#ifndef LOCKDEP_RB_CAPACITY
 #define LOCKDEP_RB_CAPACITY 4096
+#endif
+#ifndef LOCKDEP_TLS_LOCK_CACHE_SIZE
 #define LOCKDEP_TLS_LOCK_CACHE_SIZE 64
+#endif
+#define LOCKDEP_GRAPH_WORDS ((LOCKDEP_MAX_LOCK_SLOTS + 63) / 64)
 
 /* Definitions */
 #define LOCKDEP_INVALID_SLOT (-1)
+#define LOCKDEP_LOCK_SLOT_WORD_INDEX(lock_slot) ((lock_slot) / 64)
+#define LOCKDEP_LOCK_SLOT_BIT_MASK(lock_slot) (1ULL << ((lock_slot) % 64))
 
 typedef enum {
     LOCKDEP_MODE_GLOBAL = 0,
@@ -55,6 +68,8 @@ typedef struct {
 typedef struct {
     int held_lock_slots[LOCKDEP_MAX_HELD_LOCK_SLOTS];
     int held_lock_slot_count;
+    unsigned short held_lock_refcounts[LOCKDEP_MAX_LOCK_SLOTS];
+    uint64_t held_lock_bits[LOCKDEP_GRAPH_WORDS];
 } lockdep_thread_state_t;
 
 typedef struct {
@@ -117,10 +132,6 @@ void lockdep_potential_shutdown(void);
 void lockdep_potential_on_acquire(int thread_slot,
                                   int new_lock_slot,
                                   const lockdep_thread_state_t *thread_state);
-void lockdep_potential_on_release(int thread_slot,
-                                  int lock_slot,
-                                  const lockdep_thread_state_t *thread_state);
-int lockdep_potential_thread_tracking_active(void);
 
 static inline void lockdep_debug_log_lock_event(const char *op,
                                                 pthread_mutex_t *mutex,
@@ -142,6 +153,32 @@ static inline int lockdep_current_thread_slot(void) {
     }
 
     return lockdep_get_or_register_thread_slot();
+}
+
+static inline void lockdep_note_thread_holds_lock_slot(int lock_slot) {
+    if (g_lockdep_mode != LOCKDEP_MODE_RB) {
+        return;
+    }
+
+    if (tls_thread_state.held_lock_refcounts[lock_slot]++ == 0) {
+        tls_thread_state.held_lock_bits[LOCKDEP_LOCK_SLOT_WORD_INDEX(lock_slot)] |=
+            LOCKDEP_LOCK_SLOT_BIT_MASK(lock_slot);
+    }
+}
+
+static inline void lockdep_note_thread_releases_lock_slot(int lock_slot) {
+    if (g_lockdep_mode != LOCKDEP_MODE_RB) {
+        return;
+    }
+
+    if (tls_thread_state.held_lock_refcounts[lock_slot] == 0) {
+        return;
+    }
+
+    if (--tls_thread_state.held_lock_refcounts[lock_slot] == 0) {
+        tls_thread_state.held_lock_bits[LOCKDEP_LOCK_SLOT_WORD_INDEX(lock_slot)] &=
+            ~LOCKDEP_LOCK_SLOT_BIT_MASK(lock_slot);
+    }
 }
 
 static inline int lockdep_lookup_lock_slot_cached_fast(pthread_mutex_t *mutex,
@@ -172,6 +209,7 @@ static inline void lockdep_acquire_top_level_mutex_fast(pthread_mutex_t *mutex) 
 
     tls_thread_state.held_lock_slots[0] = lock_slot;
     tls_thread_state.held_lock_slot_count = 1;
+    lockdep_note_thread_holds_lock_slot(lock_slot);
     atomic_store_explicit(&g_lock_slots[lock_slot].owner_thread_slot,
                           self_thread_slot,
                           memory_order_release);
@@ -190,16 +228,13 @@ static inline int lockdep_release_top_level_mutex_fast(pthread_mutex_t *mutex) {
         return 0;
     }
 
-    if (g_lockdep_mode == LOCKDEP_MODE_RB && lockdep_potential_thread_tracking_active()) {
-        return 0;
-    }
-
     expected_owner_thread_slot = lockdep_current_thread_slot();
     atomic_compare_exchange_strong_explicit(&g_lock_slots[lock_slot].owner_thread_slot,
                                             &expected_owner_thread_slot,
                                             LOCKDEP_INVALID_SLOT,
                                             memory_order_acq_rel,
                                             memory_order_acquire);
+    lockdep_note_thread_releases_lock_slot(lock_slot);
     tls_thread_state.held_lock_slot_count = 0;
     return 1;
 }

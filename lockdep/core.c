@@ -121,6 +121,7 @@ void lockdep_acquire_mutex(pthread_mutex_t *mutex, int clear_wait_state) {
     if (held_lock_slot_count == 0) {
         tls_thread_state.held_lock_slots[0] = new_lock_slot;
         tls_thread_state.held_lock_slot_count = 1;
+        lockdep_note_thread_holds_lock_slot(new_lock_slot);
     } else {
         lockdep_debug_log_held_lock_slots(new_lock_slot);
         lockdep_potential_on_acquire(self_thread_slot, new_lock_slot, &tls_thread_state);
@@ -160,11 +161,8 @@ void lockdep_release_mutex(pthread_mutex_t *mutex) {
                                             memory_order_acq_rel,
                                             memory_order_acquire);
 
-    if (g_lockdep_mode == LOCKDEP_MODE_RB && lockdep_potential_thread_tracking_active()) {
-        lockdep_potential_on_release(self_thread_slot, lock_slot, &tls_thread_state);
-    }
-
     if (held_lock_slot_count == 1 && tls_thread_state.held_lock_slots[0] == lock_slot) {
+        lockdep_note_thread_releases_lock_slot(lock_slot);
         tls_thread_state.held_lock_slot_count = 0;
         return;
     }
