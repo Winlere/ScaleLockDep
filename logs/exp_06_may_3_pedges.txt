@@ -1,0 +1,123 @@
+Experiment: Potential Graph Construction Cost (Disjoint Locks)
+Date: 2026-05-06
+Commit ID: 69e5e0c
+
+--- Settings ---
+
+Machine
+  OS       : Linux 7.0.3-arch1-1 x86_64
+  CPU      : 11th Gen Intel(R) Core(TM) i7-11700 @ 2.50GHz (128 cores / 16 threads)
+  Memory   : 15 GiB RAM
+
+Software
+  Compiler : gcc (-Wall -Wextra -pthread; lockdep: -O3 -g -flto
+             -fno-semantic-interposition)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : 69e5e0c69de13056ad5ff71dab2eddd0f191f28a
+
+--- Parameters ---
+
+Benchmark binary : benchmarks/bench_potential_edges.out
+Invocation       : bench_potential_edges.out <num_threads> <locks_per_thread> [iters]
+
+Each thread owns a private set of <locks_per_thread> mutexes (disjoint
+across threads). Each iteration acquires its locks in fixed ascending
+order then releases in descending order. Application-level mutex
+contention is zero; the entire baseline-to-lockdep delta is potential-
+deadlock graph construction.
+
+Sweep design: trade per-thread depth against thread count, keeping
+total lock budget at or near LOCKDEP_MAX_LOCK_SLOTS (256).
+
+  threads  depth  total_locks  total_pairs (iters=100k)
+   1        64      64            6.4M
+   4        64     256           25.6M
+   8        32     256           25.6M
+  16        16     256           25.6M
+  32         8     256           25.6M
+  64         4     256           25.6M
+
+iters/thread = 100000.
+3 runs per cell.
+
+Conditions
+  baseline      : no LD_PRELOAD
+  lockdep/glob  : LOCKDEP_MODE=global LD_PRELOAD=./lockdep/liblockdep.so
+  ScaleLockDep  : LOCKDEP_MODE=rb     LD_PRELOAD=./lockdep/liblockdep.so
+
+Measurement
+  wall_ns from clock_gettime(CLOCK_MONOTONIC) inside the binary,
+  straddling pthread_create..pthread_join.
+
+lockdep limits (lockdep.h)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+Columns: threads  locks_per_thread  iters  wall_ns  total_ops  ops_per_sec
+
+Baseline (no LD_PRELOAD)
+threads	locks_per_thread	iters	wall_ns	total_ops	ops_per_sec
+1	64	100000	79371448	6400000	80633530
+1	64	100000	74462431	6400000	85949383
+1	64	100000	74045832	6400000	86432954
+4	64	100000	79563229	25600000	321756675
+4	64	100000	81761264	25600000	313106705
+4	64	100000	82635085	25600000	309795773
+8	32	100000	48956464	25600000	522913583
+8	32	100000	45168174	25600000	566770753
+8	32	100000	47925761	25600000	534159489
+16	16	100000	46345281	25600000	552375548
+16	16	100000	47994902	25600000	533389984
+16	16	100000	50068358	25600000	511300970
+32	8	100000	60895564	25600000	420391870
+32	8	100000	52447262	25600000	488109370
+32	8	100000	55382915	25600000	462236414
+64	4	100000	53640971	25600000	477247140
+64	4	100000	59474203	25600000	430438723
+64	4	100000	61253796	25600000	417933282
+
+lockdep - global mode
+threads	locks_per_thread	iters	wall_ns	total_ops	ops_per_sec
+1	64	100000	383718713	6400000	16678884
+1	64	100000	388464643	6400000	16475116
+1	64	100000	408990902	6400000	15648270
+4	64	100000	535366553	25600000	47817705
+4	64	100000	534676805	25600000	47879391
+4	64	100000	469748948	25600000	54497195
+8	32	100000	248848638	25600000	102873780
+8	32	100000	262989330	25600000	97342352
+8	32	100000	254425290	25600000	100618928
+16	16	100000	171343666	25600000	149407332
+16	16	100000	199615824	25600000	128246346
+16	16	100000	183410382	25600000	139577704
+32	8	100000	160554021	25600000	159447891
+32	8	100000	169362175	25600000	151155357
+32	8	100000	156462815	25600000	163617151
+64	4	100000	143514888	25600000	178378706
+64	4	100000	140307737	25600000	182456082
+64	4	100000	145567640	25600000	175863262
+
+lockdep - rb mode (ScaleLockDep)
+threads	locks_per_thread	iters	wall_ns	total_ops	ops_per_sec
+1	64	100000	244055126	6400000	26223584
+1	64	100000	242708028	6400000	26369132
+1	64	100000	240697861	6400000	26589351
+4	64	100000	303450226	25600000	84363094
+4	64	100000	368657643	25600000	69441121
+4	64	100000	332695860	25600000	76947155
+8	32	100000	239751146	25600000	106777383
+8	32	100000	233552627	25600000	109611270
+8	32	100000	236950639	25600000	108039379
+16	16	100000	162300888	25600000	157731731
+16	16	100000	151423071	25600000	169062745
+16	16	100000	163598364	25600000	156480782
+32	8	100000	160875993	25600000	159128777
+32	8	100000	162041385	25600000	157984332
+32	8	100000	171747763	25600000	149055799
+64	4	100000	146110379	25600000	175210003
+64	4	100000	153105751	25600000	167204692
+64	4	100000	146346965	25600000	174926757
+

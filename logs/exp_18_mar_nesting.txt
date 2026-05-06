@@ -1,0 +1,78 @@
+Experiment: Nesting Depth Scaling (3-deep vs 40-deep)
+Date: 2026-05-06
+Commit ID: 9295d08
+
+--- Settings ---
+
+Machine
+  OS       : Linux archdell 7.0.3-arch1-1 x86_64
+  CPU      : 11th Gen Intel Core i7-11700 @ 2.50 GHz (8 cores / 16 threads)
+  Memory   : 16 GiB RAM
+
+Software
+  Compiler : gcc (-Wall -Wextra -pthread; lockdep at March: -O2 -Wall -Wextra -fPIC)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : 9295d088ce8e85c8e8b2dd6ea9c89eaa66dd6562 (worktree: /tmp/nodeadlock-march)
+  Note     : The March lockdep had only the synchronous global-mode detector;
+             LOCKDEP_MODE was not yet introduced and the rb backend did not
+             exist. Re-measured on 2026-05-06 from a clean build of the
+             March commit so the baseline reflects the current machine.
+
+--- Parameters ---
+
+Benchmark binaries
+  shallow : benchmarks/correct_40threads_3locks_10000iter.out
+  deep    : benchmarks/correct_40threads_40locks_10000iter.out
+
+Both binaries are parameter-free. Each iteration acquires N locks in a
+fixed global order, then releases in reverse. No actual deadlock; this
+exercises potential-deadlock graph maintenance under deep held-stack
+pressure.
+
+Workload
+  threads        = 40
+  iters/thread   = 10,000
+  shallow N      = 3   ->  pairs = 40 x 10000 x 3  = 1,200,000
+  deep    N      = 40  ->  pairs = 40 x 10000 x 40 = 16,000,000
+
+Conditions
+  baseline : no LD_PRELOAD
+  global   : LD_PRELOAD=./lockdep/liblockdep.so   (only mode that existed
+                                                    at commit 9295d08)
+
+Measurement
+  wall_ns captured externally with date +%s%N straddling the run.
+  Stdout redirected to /dev/null. 5 runs per cell.
+
+lockdep limits (lockdep.h, March commit)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+Shallow (3-deep nest, 3 shared locks, 1,200,000 pairs/run)
+condition  run  wall_ns
+baseline   1  96061188
+baseline   2  94710269
+baseline   3  91404064
+baseline   4  94983198
+baseline   5  94994511
+global     1  273030989
+global     2  316925391
+global     3  340720641
+global     4  289440635
+global     5  313604400
+
+Deep (40-deep nest, 40 shared locks, 16,000,000 pairs/run)
+condition  run  wall_ns
+baseline   1  385943458
+baseline   2  370571752
+baseline   3  370233774
+baseline   4  375250627
+baseline   5  370489376
+global     1  3569305188
+global     2  3544780032
+global     3  3411969612
+global     4  3425692506
+global     5  3385900227
