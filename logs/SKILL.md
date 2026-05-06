@@ -142,6 +142,80 @@ two backends should diverge most clearly.
 and `ns_per_pair = wall / pairs`. Headline number is the overhead ratio
 `lockdep_wall / baseline_wall` reported separately for shallow vs deep.
 
+### 5. Potential Graph Construction Cost (Disjoint Locks)
+
+**Make target**: `make potential-edges`
+**Binary**: `benchmarks/bench_potential_edges.out`
+**Invocation**: `bench_potential_edges.out <num_threads> <locks_per_thread> [iters]`
+
+Each thread owns a *private* set of `locks_per_thread` mutexes; the per-thread
+sets are disjoint. Every iteration acquires the thread's locks in fixed
+ascending order and releases in descending order. Because no two threads ever
+touch the same mutex, application-level mutex contention is zero — the entire
+delta between the baseline and lockdep conditions is the cost of
+potential-deadlock graph construction (held-stack maintenance, dependency edge
+insertion, cycle/DFS check in `global`, async enqueue in `rb`).
+
+**Sweep**: trade per-thread nesting depth against thread count at (mostly)
+fixed total lock budget.
+
+| threads | depth | total locks | total pairs (iters=100k) |
+|---------|-------|-------------|--------------------------|
+| 1       | 64    |  64         |   6.4M                   |
+| 4       | 64    | 256         |  25.6M                   |
+| 8       | 32    | 256         |  25.6M                   |
+| 16      | 16    | 256         |  25.6M                   |
+| 32      |  8    | 256         |  25.6M                   |
+| 64      |  4    | 256         |  25.6M                   |
+
+`iters = 100,000`. Three runs per cell; mean reported.
+
+The (1, 64) cell is single-threaded — pure depth measurement with no scheduling
+or false-sharing noise. The (4, 64) cell pushes both depth (max held-stack) and
+total lock count to their LOCKDEP limits simultaneously. As we walk the table
+toward (64, 4), depth shrinks while parallelism grows; total work stays the
+same (25.6M pairs).
+
+**Constraints** (tied to `lockdep.h`):
+
+- `num_threads * locks_per_thread <= LOCKDEP_MAX_LOCK_SLOTS` (256)
+- `locks_per_thread <= LOCKDEP_MAX_HELD_LOCK_SLOTS` (64)
+- `num_threads <= LOCKDEP_MAX_THREAD_SLOTS` (128)
+
+All sweep cells are at or under these limits. (4, 64) saturates lock-slots
+exactly; (1, 64) and (4, 64) saturate the held-lock stack.
+
+**Conditions**: baseline / `LOCKDEP_MODE=global` / `LOCKDEP_MODE=rb`.
+
+**Purpose**: Three things that the high/low-contention overhead experiment
+cannot separate cleanly:
+
+1. **Fixed per-call interception cost** (TLS lookup, recursive guard, slot
+   resolution, held-stack push/pop). Best estimated from the shallowest cell
+   (64, 4) where dependency-edge work is minimal.
+2. **Per-acquire scan cost** over the held stack. In `global` mode, every
+   acquire iterates currently-held locks to add edges (or skip via
+   predecessor summary). This is O(depth) per acquire and should make
+   marginal cost grow ~linearly in `locks_per_thread`.
+3. **Backend trade-off**: `rb` adds a constant enqueue cost per acquire but
+   moves the O(depth) work to a worker thread. Crossover is depth-dependent.
+
+**Metric**: `wall_ns`; derived `ns_per_pair = wall_ns / total_ops` and
+marginal cost `ns_per_pair[lockdep] − ns_per_pair[baseline]`. The marginal
+ns/pair across the sweep is the headline number.
+
+**Caveats**:
+
+- The (64, 4) cell oversubscribes the 16 hardware threads on the reference
+  machine 4×, so its baseline is dominated by scheduler behavior, not pthread
+  fast path. Compare `(N, 4)` cells against each other within-condition; do
+  not read absolute throughput across sweep rows as a parallel-scaling number.
+- `ns_per_pair[baseline]` is *not* monotonic in either threads or depth on
+  modern CPUs. A single mutex word rewritten in a tight loop serializes the
+  cmpxchg→store→load chain; spreading work across more cachelines lets the
+  out-of-order window hide that latency. Treat overhead *ratios* as
+  qualitative; treat marginal ns/pair as the trustworthy number.
+
 ---
 
 ## Log File Format
@@ -194,3 +268,7 @@ Python scripts in `scripts/` generate PDF plots from the raw data:
 | `plot_overhead.py`          | High/low contention      | `plots/overhead_benchmarks.pdf` |
 | `plot_overhead-cslen.py`    | Critical section length  | `plots/exp_24_mar_cslen.pdf`    |
 | `plot_latency.py`           | Per-operation latency    | `plots/exp_24_mar_latency.pdf`  |
+
+The nesting-depth and potential-graph-construction experiments do not yet
+have plotting scripts — raw data and tables in the log files are the
+authoritative output for those.
