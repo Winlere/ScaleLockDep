@@ -33,7 +33,8 @@ This rebuilds `lockdep/liblockdep.so` and all benchmark binaries from scratch, e
 Every experiment runs two conditions:
 
 - **baseline**: benchmark binary run directly (no `LD_PRELOAD`)
-- **lockdep**: benchmark binary run with `LD_PRELOAD=./lockdep/liblockdep.so`
+- **lockdep**: benchmark binary run with `LOCKDEP_MODE=global LD_PRELOAD=./lockdep/liblockdep.so`
+- **ScaleLockDep**: benchmark binary run with `LOCKDEP_MODE=rb LD_PRELOAD=./lockdep/liblockdep.so` 
 
 Record the lockdep limits from `lockdep/lockdep.h` (`LOCKDEP_MAX_LOCK_SLOTS`, `LOCKDEP_MAX_HELD_LOCK_SLOTS`, `LOCKDEP_MAX_THREAD_SLOTS`).
 
@@ -66,7 +67,7 @@ Two scenarios:
 **Overhead**: baseline ops/s ÷ lockdep ops/s
 
 
-### 3. Overhead — Critical Section Length
+### 2. Overhead — Critical Section Length
 
 **Make target**: `make overhead-cslen`
 **Binary**: `benchmarks/bench_overhead_cslen.out`
@@ -80,7 +81,7 @@ CS hold times swept: 0, 10, 20, 30, 50, 75, 100, 150, 200, 300, 500, 750, 1000, 
 
 **Metric**: `ops_per_sec`
 
-### 4. Per-Operation Latency
+### 3. Per-Operation Latency
 
 **Make target**: `make latency`
 **Binary**: `benchmarks/bench_latency.out`
@@ -91,6 +92,11 @@ CS hold times swept: 0, 10, 20, 30, 50, 75, 100, 150, 200, 300, 500, 750, 1000, 
 **Note**: `clock_gettime` adds ~15–25 ns measurement overhead per call. This is consistent across conditions, so the *difference* between baseline and lockdep is accurate.
 
 **Metrics**: `avg_lock_ns`, `avg_unlock_ns`, `avg_pair_ns`
+
+
+### 4. Nesting Depth Scaling
+
+
 
 ---
 
