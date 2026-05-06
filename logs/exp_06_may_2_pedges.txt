@@ -1,0 +1,123 @@
+Experiment: Potential Graph Construction Cost (Disjoint Locks)
+Date: 2026-05-06
+Commit ID: 93e1cdc
+
+--- Settings ---
+
+Machine
+  OS       : Linux 7.0.3-arch1-1 x86_64
+  CPU      : 11th Gen Intel(R) Core(TM) i7-11700 @ 2.50GHz (128 cores / 16 threads)
+  Memory   : 15 GiB RAM
+
+Software
+  Compiler : gcc (-Wall -Wextra -pthread; lockdep: -O3 -g -flto
+             -fno-semantic-interposition)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : 93e1cdc2a753f95dd4b5bdd3b83c376bfd1710a7
+
+--- Parameters ---
+
+Benchmark binary : benchmarks/bench_potential_edges.out
+Invocation       : bench_potential_edges.out <num_threads> <locks_per_thread> [iters]
+
+Each thread owns a private set of <locks_per_thread> mutexes (disjoint
+across threads). Each iteration acquires its locks in fixed ascending
+order then releases in descending order. Application-level mutex
+contention is zero; the entire baseline-to-lockdep delta is potential-
+deadlock graph construction.
+
+Sweep design: trade per-thread depth against thread count, keeping
+total lock budget at or near LOCKDEP_MAX_LOCK_SLOTS (256).
+
+  threads  depth  total_locks  total_pairs (iters=100k)
+   1        64      64            6.4M
+   4        64     256           25.6M
+   8        32     256           25.6M
+  16        16     256           25.6M
+  32         8     256           25.6M
+  64         4     256           25.6M
+
+iters/thread = 100000.
+3 runs per cell.
+
+Conditions
+  baseline      : no LD_PRELOAD
+  lockdep/glob  : LOCKDEP_MODE=global LD_PRELOAD=./lockdep/liblockdep.so
+  ScaleLockDep  : LOCKDEP_MODE=rb     LD_PRELOAD=./lockdep/liblockdep.so
+
+Measurement
+  wall_ns from clock_gettime(CLOCK_MONOTONIC) inside the binary,
+  straddling pthread_create..pthread_join.
+
+lockdep limits (lockdep.h)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+Columns: threads  locks_per_thread  iters  wall_ns  total_ops  ops_per_sec
+
+Baseline (no LD_PRELOAD)
+threads	locks_per_thread	iters	wall_ns	total_ops	ops_per_sec
+1	64	100000	76194095	6400000	83996010
+1	64	100000	74212024	6400000	86239394
+1	64	100000	75448681	6400000	84825870
+4	64	100000	81005569	25600000	316027655
+4	64	100000	80291390	25600000	318838670
+4	64	100000	80563084	25600000	317763406
+8	32	100000	47616930	25600000	537623908
+8	32	100000	46258796	25600000	553408264
+8	32	100000	43040297	25600000	594791435
+16	16	100000	44341609	25600000	577335838
+16	16	100000	47101447	25600000	543507719
+16	16	100000	53238724	25600000	480852997
+32	8	100000	46126662	25600000	554993552
+32	8	100000	46320006	25600000	552676958
+32	8	100000	49743328	25600000	514641883
+64	4	100000	49859723	25600000	513440478
+64	4	100000	47581730	25600000	538021631
+64	4	100000	47473669	25600000	539246293
+
+lockdep - global mode
+threads	locks_per_thread	iters	wall_ns	total_ops	ops_per_sec
+1	64	100000	404181218	6400000	15834481
+1	64	100000	394726709	6400000	16213750
+1	64	100000	381105482	6400000	16793251
+4	64	100000	461699246	25600000	55447351
+4	64	100000	532830303	25600000	48045315
+4	64	100000	478410815	25600000	53510496
+8	32	100000	260173334	25600000	98395941
+8	32	100000	341681159	25600000	74923651
+8	32	100000	252347772	25600000	101447299
+16	16	100000	180778964	25600000	141609397
+16	16	100000	197642655	25600000	129526696
+16	16	100000	198682127	25600000	128849033
+32	8	100000	194413413	25600000	131678157
+32	8	100000	185539870	25600000	137975735
+32	8	100000	205768006	25600000	124411955
+64	4	100000	157286689	25600000	162760118
+64	4	100000	153535462	25600000	166736724
+64	4	100000	163581554	25600000	156496863
+
+lockdep - rb mode (ScaleLockDep)
+threads	locks_per_thread	iters	wall_ns	total_ops	ops_per_sec
+1	64	100000	272632707	6400000	23474806
+1	64	100000	254668842	6400000	25130675
+1	64	100000	250086959	6400000	25591098
+4	64	100000	381461014	25600000	67110397
+4	64	100000	360985093	25600000	70917056
+4	64	100000	390675937	25600000	65527455
+8	32	100000	226770510	25600000	112889458
+8	32	100000	241970418	25600000	105798057
+8	32	100000	221727512	25600000	115457030
+16	16	100000	179584440	25600000	142551326
+16	16	100000	176574448	25600000	144981340
+16	16	100000	185387342	25600000	138089255
+32	8	100000	179236951	25600000	142827692
+32	8	100000	184456050	25600000	138786448
+32	8	100000	202907282	25600000	126165999
+64	4	100000	166955148	25600000	153334595
+64	4	100000	180243762	25600000	142029881
+64	4	100000	171873122	25600000	148947082
+
