@@ -3,12 +3,13 @@
 # dependencies = ["matplotlib"]
 # ///
 """
-Visualize per-operation latency from logs/exp_24_mar_latency.txt.
+Visualize per-operation latency.
+
+Handles both legacy 2-condition and new 3-condition (baseline / global / rb)
+log formats.
 
 Usage:
     uv run scripts/plot_latency.py [LOG_FILE]
-
-Defaults to logs/exp_24_mar_latency.txt if no argument is given.
 """
 
 import os
@@ -18,20 +19,13 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 
 
-# --- Parsing ---
-
-_DATA_COLUMNS = {
-    "threads", "locks", "iters", "wall_ns", "total_ops", "ops_per_sec",
-    "cs_ns", "avg_lock_ns", "avg_unlock_ns", "avg_pair_ns",
-}
+_DATA_COLUMNS = {"threads", "iters", "avg_lock_ns", "avg_unlock_ns", "avg_pair_ns"}
 
 
 def parse_tables(path):
-    """Parse raw-data tables from an experiment log."""
     with open(path) as f:
         lines = f.readlines()
-
-    tables = {}
+    tables = []
     i = 0
     while i < len(lines):
         tokens = lines[i].split()
@@ -48,60 +42,65 @@ def parse_tables(path):
                 vals = lines[i].split()
                 rows.append({c: float(v) for c, v in zip(cols, vals)})
                 i += 1
-            tables[title] = rows
+            tables.append((title, rows))
         i += 1
     return tables
+
+
+def find(tables, *needles):
+    for title, rows in tables:
+        lower = title.lower()
+        if all(n in lower for n in needles):
+            return rows
+    return None
 
 
 def column(table, name):
     return [row[name] for row in table]
 
 
-# --- Helpers ---
-
-def annotate(ax, xs, ys, fmt="{:.0f}", color="black", offset=(0, 6)):
-    """Place a text label above each data point."""
+def annotate(ax, xs, ys, fmt="{:.1f}", color="black", offset=(0, 6), fontsize=6.5):
     for i, (x, y) in enumerate(zip(xs, ys)):
         ha = "right" if i == len(xs) - 1 else "center"
         dx = offset[0] - 4 if i == len(xs) - 1 else offset[0]
         ax.annotate(fmt.format(y), (x, y), textcoords="offset points",
                     xytext=(dx, offset[1]), ha=ha, va="bottom",
-                    fontsize=6.5, color=color)
+                    fontsize=fontsize, color=color)
 
 
 # --- Load data ---
 
-log_file = sys.argv[1] if len(sys.argv) > 1 else "logs/exp_24_mar_latency.txt"
+log_file = sys.argv[1] if len(sys.argv) > 1 else "logs/exp_06_may_latency.txt"
 tables = parse_tables(log_file)
 
-base_tbl = None
-lock_tbl = None
-for key in tables:
-    lower = key.lower()
-    if "baseline" in lower or lower.startswith("baseline"):
-        base_tbl = tables[key]
-    elif "lockdep" in lower or lower.startswith("with"):
-        lock_tbl = tables[key]
+base = find(tables, "baseline")
+glob = find(tables, "global") or find(tables, "with lockdep")
+rb = find(tables, "rb")
 
-if base_tbl is None or lock_tbl is None:
-    print(f"Error: could not find baseline/lockdep tables in {log_file}")
-    print(f"Found tables: {list(tables.keys())}")
+if base is None or glob is None:
+    print(f"Error: missing baseline or lockdep table in {log_file}")
+    print(f"Found titles: {[t for t, _ in tables]}")
     sys.exit(1)
 
-threads = [int(t) for t in column(base_tbl, "threads")]
+threads = [int(t) for t in column(base, "threads")]
+b_pair = column(base, "avg_pair_ns")
+g_pair = column(glob, "avg_pair_ns")
+r_pair = column(rb, "avg_pair_ns") if rb else None
 
-base_lock = column(base_tbl, "avg_lock_ns")
-base_unlock = column(base_tbl, "avg_unlock_ns")
-base_pair = column(base_tbl, "avg_pair_ns")
+b_lock = column(base, "avg_lock_ns")
+g_lock = column(glob, "avg_lock_ns")
+r_lock = column(rb, "avg_lock_ns") if rb else None
 
-lock_lock = column(lock_tbl, "avg_lock_ns")
-lock_unlock = column(lock_tbl, "avg_unlock_ns")
-lock_pair = column(lock_tbl, "avg_pair_ns")
+b_unlock = column(base, "avg_unlock_ns")
+g_unlock = column(glob, "avg_unlock_ns")
+r_unlock = column(rb, "avg_unlock_ns") if rb else None
 
-added_lock = [l - b for b, l in zip(base_lock, lock_lock)]
-added_unlock = [l - b for b, l in zip(base_unlock, lock_unlock)]
-added_pair = [l - b for b, l in zip(base_pair, lock_pair)]
-pair_overhead = [l / b for b, l in zip(base_pair, lock_pair)]
+g_added_pair = [l - bb for bb, l in zip(b_pair, g_pair)]
+r_added_pair = [l - bb for bb, l in zip(b_pair, r_pair)] if r_pair else None
+
+g_pair_over = [l / bb for bb, l in zip(b_pair, g_pair)]
+r_pair_over = [l / bb for bb, l in zip(b_pair, r_pair)] if r_pair else None
+
 
 # --- Style ---
 plt.rcParams.update({
@@ -117,76 +116,79 @@ plt.rcParams.update({
 })
 
 COLOR_BASELINE = "#2d2d2d"
-COLOR_LOCKDEP = "#b04040"
-COLOR_LOCK = "#4a7ab5"
-COLOR_UNLOCK = "#2d8e5e"
-COLOR_PAIR = "#7b5ea7"
+COLOR_GLOBAL = "#b04040"
+COLOR_RB = "#4a7ab5"
 
-fig, axes = plt.subplots(2, 2, figsize=(9, 7))
+fig, axes = plt.subplots(2, 2, figsize=(9.5, 7.5))
 
 # --- Top-left: Lock latency ---
 ax = axes[0, 0]
-ax.plot(threads, base_lock, "o-", color=COLOR_BASELINE, label="baseline")
-ax.plot(threads, lock_lock, "s-", color=COLOR_LOCKDEP, label="lockdep")
-annotate(ax, threads, base_lock, color=COLOR_BASELINE)
-annotate(ax, threads, lock_lock, color=COLOR_LOCKDEP)
+ax.plot(threads, b_lock, "o-", color=COLOR_BASELINE, label="baseline")
+ax.plot(threads, g_lock, "s-", color=COLOR_GLOBAL, label="global")
+if r_lock:
+    ax.plot(threads, r_lock, "D-", color=COLOR_RB, label="rb")
 ax.set_xscale("log", base=2)
 ax.set_yscale("log")
-ax.set_ylabel("latency (ns)")
+ax.set_ylabel("avg lock latency (ns)")
 ax.set_title("Lock latency")
 ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
 ax.set_xticks(threads)
-ax.legend(frameon=False)
+ax.legend(frameon=False, fontsize=8)
 ylo, yhi = ax.get_ylim()
 ax.set_ylim(ylo, yhi * 1.5)
 
 # --- Top-right: Unlock latency ---
 ax = axes[0, 1]
-ax.plot(threads, base_unlock, "o-", color=COLOR_BASELINE, label="baseline")
-ax.plot(threads, lock_unlock, "s-", color=COLOR_LOCKDEP, label="lockdep")
-annotate(ax, threads, base_unlock, color=COLOR_BASELINE)
-annotate(ax, threads, lock_unlock, color=COLOR_LOCKDEP)
+ax.plot(threads, b_unlock, "o-", color=COLOR_BASELINE, label="baseline")
+ax.plot(threads, g_unlock, "s-", color=COLOR_GLOBAL, label="global")
+if r_unlock:
+    ax.plot(threads, r_unlock, "D-", color=COLOR_RB, label="rb")
 ax.set_xscale("log", base=2)
 ax.set_yscale("log")
-ax.set_ylabel("latency (ns)")
+ax.set_ylabel("avg unlock latency (ns)")
 ax.set_title("Unlock latency")
 ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
 ax.set_xticks(threads)
-ax.legend(frameon=False)
+ax.legend(frameon=False, fontsize=8)
 ylo, yhi = ax.get_ylim()
 ax.set_ylim(ylo, yhi * 1.5)
 
-# --- Bottom-left: Added delay (lock vs unlock) ---
+# --- Bottom-left: Added pair delay ---
 ax = axes[1, 0]
-ax.plot(threads, added_lock, "D-", color=COLOR_LOCK, label="lock")
-ax.plot(threads, added_unlock, "^-", color=COLOR_UNLOCK, label="unlock")
-annotate(ax, threads, added_lock, color=COLOR_LOCK)
-annotate(ax, threads, added_unlock, color=COLOR_UNLOCK)
+ax.plot(threads, g_added_pair, "s-", color=COLOR_GLOBAL, label="global")
+if r_added_pair:
+    ax.plot(threads, r_added_pair, "D-", color=COLOR_RB, label="rb")
 ax.set_xscale("log", base=2)
 ax.set_yscale("log")
-ax.set_ylabel("added delay (ns)")
+ax.set_ylabel("added pair delay (ns)")
 ax.set_xlabel("threads")
-ax.set_title("Lockdep added delay")
+ax.set_title("Lockdep added pair delay (lockdep - baseline)")
 ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
 ax.set_xticks(threads)
-ax.legend(frameon=False)
+ax.legend(frameon=False, fontsize=8)
 ylo, yhi = ax.get_ylim()
 ax.set_ylim(ylo, yhi * 1.5)
 
 # --- Bottom-right: Pair overhead factor ---
 ax = axes[1, 1]
-ax.plot(threads, pair_overhead, "D-", color=COLOR_PAIR)
-annotate(ax, threads, pair_overhead, fmt="{:.1f}×", color=COLOR_PAIR)
+ax.plot(threads, g_pair_over, "s-", color=COLOR_GLOBAL, label="global")
+if r_pair_over:
+    ax.plot(threads, r_pair_over, "D-", color=COLOR_RB, label="rb")
+annotate(ax, threads, g_pair_over, fmt="{:.2f}x", color=COLOR_GLOBAL)
+if r_pair_over:
+    annotate(ax, threads, r_pair_over, fmt="{:.2f}x", color=COLOR_RB, offset=(0, -14))
+ax.axhline(y=1.0, color="#888888", linewidth=0.8, linestyle="--", zorder=0)
 ax.set_xscale("log", base=2)
-ax.set_ylabel("overhead (×)")
+ax.set_ylabel("overhead (x)")
 ax.set_xlabel("threads")
 ax.set_title("Lock+unlock pair overhead")
 ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
 ax.set_xticks(threads)
+ax.legend(frameon=False, fontsize=8)
 ylo, yhi = ax.get_ylim()
-ax.set_ylim(ylo, yhi + (yhi - ylo) * 0.08)
+ax.set_ylim(ylo, yhi + (yhi - ylo) * 0.15)
 
-fig.suptitle("Per-Operation Latency (1 shared lock)",
+fig.suptitle("Per-Operation Latency (1 shared lock, baseline vs global vs rb)",
              fontsize=13, fontweight="bold", y=0.98)
 fig.tight_layout(rect=[0, 0, 1, 0.95])
 
