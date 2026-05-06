@@ -96,7 +96,51 @@ CS hold times swept: 0, 10, 20, 30, 50, 75, 100, 150, 200, 300, 500, 750, 1000, 
 
 ### 4. Nesting Depth Scaling
 
+**Binaries** (no make target — invoke directly):
+- `benchmarks/correct_40threads_3locks_10000iter.out`  (shallow: 3-deep nest)
+- `benchmarks/correct_40threads_40locks_10000iter.out` (deep: 40-deep nest)
 
+Both binaries are parameter-free. Each spawns 40 threads, runs 10,000 iterations
+per thread, and within every iteration acquires N locks in a fixed global order
+(`A→B→C…` or `locks[0]→locks[1]→…→locks[N-1]`), then releases in reverse. There
+is no actual deadlock; the workload exercises *potential*-deadlock detection
+under deep held-stack and dependency-edge pressure.
+
+| Variant   | Locks (N) | Threads | Iters | Pairs per run = T·I·N |
+|-----------|-----------|---------|-------|-----------------------|
+| shallow   | 3         | 40      | 10000 | 1,200,000             |
+| deep      | 40        | 40      | 10000 | 16,000,000            |
+
+**Conditions**: baseline, `LOCKDEP_MODE=global`, `LOCKDEP_MODE=rb`.
+
+**Invocation pattern** (5 runs per cell, take the mean):
+
+```bash
+# baseline
+./benchmarks/correct_40threads_3locks_10000iter.out  >/dev/null
+# global
+LOCKDEP_MODE=global LD_PRELOAD=./lockdep/liblockdep.so \
+  ./benchmarks/correct_40threads_3locks_10000iter.out >/dev/null
+# rb
+LOCKDEP_MODE=rb LD_PRELOAD=./lockdep/liblockdep.so \
+  ./benchmarks/correct_40threads_3locks_10000iter.out >/dev/null
+```
+
+Wall time is captured externally with `date +%s%N` straddling the run. Stdout
+must be redirected to `/dev/null` — the per-iteration `progress` printf is
+otherwise an order of magnitude noisier than the work being measured.
+
+**Purpose**: Isolates how detection cost scales with nesting depth (size of the
+held-lock stack on each acquire), independent of the lock *count* or number of
+threads. With N held locks, every nested acquire under `global` mode adds up to
+N dependency edges and runs DFS over the resulting graph — work that is O(N) per
+acquire and O(N²) per iteration. The `rb` backend pushes that work off the hot
+path into a worker thread, so the deep-nest condition is the scenario where the
+two backends should diverge most clearly.
+
+**Metrics**: wall-clock `wall_ns` per run; derived `ops_per_sec = pairs / wall`
+and `ns_per_pair = wall / pairs`. Headline number is the overhead ratio
+`lockdep_wall / baseline_wall` reported separately for shallow vs deep.
 
 ---
 
