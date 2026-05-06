@@ -3,10 +3,12 @@
 # dependencies = ["matplotlib"]
 # ///
 """
-Compare cslen sweep: 3-condition new log (baseline + global + rb) against
-an older 1-condition log.
+Compare cslen sweep: simplified 3-line view.
 
-Output: plots/<new_basename>_vs_<old_basename>_cslen.pdf
+Lines per panel:
+  1. baseline                  (no LD_PRELOAD, from new log)
+  2. Naive Method              (March's synchronous lockdep, from old log)
+  3. ScaleLockDep              (new rb mode)
 
 Usage:
     uv run scripts/plot_cslen_compare3.py <old_log> <new_log>
@@ -67,11 +69,11 @@ def commit_label(path):
     with open(path) as f:
         for line in f:
             if line.startswith("Commit ID:"):
-                return line.split(":", 1)[1].strip()
+                return line.split(":", 1)[1].strip().split()[0]
     return os.path.basename(path)
 
 
-def annotate(ax, xs, ys, fmt="{:.1f}x", color="black", offset=(0, 6), fontsize=6.5):
+def annotate(ax, xs, ys, fmt="{:.1f}x", color="black", offset=(0, 6), fontsize=7):
     for i, (x, y) in enumerate(zip(xs, ys)):
         ha = "right" if i == len(xs) - 1 else "center"
         dx = offset[0] - 4 if i == len(xs) - 1 else offset[0]
@@ -94,28 +96,22 @@ old_commit = commit_label(old_file)
 new_commit = commit_label(new_file)
 
 new_base = find(new_tables, "baseline")
-new_glob = find(new_tables, "global")
 new_rb = find(new_tables, "rb")
-old_lock = (find(old_tables, "with lockdep")
-            or find(old_tables, "lockdep", exclude=("baseline",)))
+old_naive = (find(old_tables, "with lockdep")
+             or find(old_tables, "lockdep", exclude=("baseline",)))
 
-if not all([new_base, new_glob, new_rb, old_lock]):
+if not all([new_base, new_rb, old_naive]):
     print("Error: missing tables", file=sys.stderr)
-    print(f"  new: {[t for t,_ in new_tables]}", file=sys.stderr)
-    print(f"  old: {[t for t,_ in old_tables]}", file=sys.stderr)
     sys.exit(1)
 
 cs_ns = column(new_base, "cs_ns")
 new_b = column(new_base, "ops_per_sec")
-new_g = column(new_glob, "ops_per_sec")
-new_r = column(new_rb, "ops_per_sec")
-old_l = column(old_lock, "ops_per_sec")
+new_s = column(new_rb, "ops_per_sec")
+old_n = column(old_naive, "ops_per_sec")
 
-old_over = [b / l for b, l in zip(new_b, old_l)]
-new_g_over = [b / l for b, l in zip(new_b, new_g)]
-new_r_over = [b / l for b, l in zip(new_b, new_r)]
+old_n_over = [b / l for b, l in zip(new_b, old_n)]
+new_s_over = [b / l for b, l in zip(new_b, new_s)]
 
-# --- Style ---
 plt.rcParams.update({
     "font.family": "serif",
     "font.size": 10,
@@ -123,24 +119,25 @@ plt.rcParams.update({
     "axes.grid": True,
     "grid.alpha": 0.3,
     "grid.linewidth": 0.5,
-    "lines.linewidth": 1.7,
-    "lines.markersize": 4.5,
+    "lines.linewidth": 1.8,
+    "lines.markersize": 5,
     "figure.facecolor": "white",
 })
 
 COLOR_BASE = "#2d2d2d"
-COLOR_OLD = "#b04040"
-COLOR_GLOB = "#5a8f3a"
-COLOR_RB = "#4a7ab5"
+COLOR_NAIVE = "#b04040"
+COLOR_SCALE = "#4a7ab5"
+
+LBL_BASE = "baseline"
+LBL_NAIVE = f"Naive Method ({old_commit})"
+LBL_SCALE = f"ScaleLockDep ({new_commit})"
 
 fig, axes = plt.subplots(1, 2, figsize=(11, 4.4))
 
-# Left: throughput
 ax = axes[0]
-ax.plot(cs_ns, to_millions(new_b), "o-", color=COLOR_BASE, label="baseline (new)")
-ax.plot(cs_ns, to_millions(old_l), "s--", color=COLOR_OLD, label=f"lockdep ({old_commit})")
-ax.plot(cs_ns, to_millions(new_g), "^-", color=COLOR_GLOB, label=f"global ({new_commit})")
-ax.plot(cs_ns, to_millions(new_r), "D-", color=COLOR_RB, label=f"rb ({new_commit})")
+ax.plot(cs_ns, to_millions(new_b), "o-", color=COLOR_BASE, label=LBL_BASE)
+ax.plot(cs_ns, to_millions(old_n), "s--", color=COLOR_NAIVE, label=LBL_NAIVE)
+ax.plot(cs_ns, to_millions(new_s), "D-", color=COLOR_SCALE, label=LBL_SCALE)
 ax.set_xscale("symlog", linthresh=10)
 ax.set_yscale("log")
 ax.set_ylabel("ops/s (millions)")
@@ -148,25 +145,22 @@ ax.set_xlabel("critical section length (ns)")
 ax.set_title("Throughput")
 ax.legend(frameon=False, fontsize=8)
 
-# Right: overhead factor
 ax = axes[1]
 cs_plot = [max(x, 1) for x in cs_ns]
-ax.plot(cs_plot, old_over, "s--", color=COLOR_OLD, label=f"old ({old_commit})")
-ax.plot(cs_plot, new_g_over, "^-", color=COLOR_GLOB, label=f"global ({new_commit})")
-ax.plot(cs_plot, new_r_over, "D-", color=COLOR_RB, label=f"rb ({new_commit})")
-annotate(ax, cs_plot, old_over, color=COLOR_OLD, offset=(0, -14))
-annotate(ax, cs_plot, new_g_over, color=COLOR_GLOB)
-annotate(ax, cs_plot, new_r_over, color=COLOR_RB, offset=(0, -22))
+ax.plot(cs_plot, old_n_over, "s--", color=COLOR_NAIVE, label=LBL_NAIVE)
+ax.plot(cs_plot, new_s_over, "D-", color=COLOR_SCALE, label=LBL_SCALE)
+annotate(ax, cs_plot, old_n_over, color=COLOR_NAIVE, offset=(0, -14))
+annotate(ax, cs_plot, new_s_over, color=COLOR_SCALE)
 ax.axhline(y=1.0, color="#888888", linewidth=0.8, linestyle="--", zorder=0)
 ax.set_xscale("log")
-ax.set_ylabel("overhead (x)")
+ax.set_ylabel("overhead vs baseline (x)")
 ax.set_xlabel("critical section length (ns)")
 ax.set_title("Overhead factor")
 ax.set_xticks(cs_plot)
 ax.set_xticklabels([str(v) for v in cs_ns], fontsize=7, rotation=45, ha="right")
 ax.legend(frameon=False, fontsize=8)
 
-fig.suptitle(f"CS Length: new ({new_commit}) vs old ({old_commit})",
+fig.suptitle(f"CS Length: ScaleLockDep ({new_commit}) vs Naive Method ({old_commit})",
              fontsize=13, fontweight="bold", y=0.995)
 fig.tight_layout(rect=[0, 0, 1, 0.93])
 
