@@ -65,32 +65,8 @@ Two scenarios:
 **Metric**: `ops_per_sec` (total lock/unlock pairs / wall time)
 **Overhead**: baseline ops/s ÷ lockdep ops/s
 
-### 2. Overhead — 2-Lock Any-Acquire
 
-**Make target**: `make overhead-anylock`
-**Binary**: `benchmarks/bench_overhead_anylock.out`
-**Invocation**: `bench_overhead_anylock.out <num_threads> <iters_per_thread>`
-
-2 shared locks. Each iteration a thread acquires whichever lock is free:
-1. `trylock(lock[tid % 2])` — preferred (non-blocking)
-2. `trylock(lock[1 - tid % 2])` — alternate (non-blocking)
-3. `lock(lock[tid % 2])` — blocking fallback
-
-Allows up to 2-way concurrency. Reduces application-level serialization compared to 1-lock, making lockdep overhead more visible.
-
-**Metric**: `ops_per_sec`
-
-### 3. Overhead — 4-Lock Any-Acquire
-
-**Make target**: `make overhead-anylock4`
-**Binary**: `benchmarks/bench_overhead_anylock4.out`
-**Invocation**: `bench_overhead_anylock4.out <num_threads> <iters_per_thread>`
-
-4 shared locks. Round-robin trylock starting from `lock[tid % 4]`, falls back to blocking on preferred lock.
-
-**Metric**: `ops_per_sec`
-
-### 4. Overhead — Critical Section Length
+### 3. Overhead — Critical Section Length
 
 **Make target**: `make overhead-cslen`
 **Binary**: `benchmarks/bench_overhead_cslen.out`
@@ -104,7 +80,7 @@ CS hold times swept: 0, 10, 20, 30, 50, 75, 100, 150, 200, 300, 500, 750, 1000, 
 
 **Metric**: `ops_per_sec`
 
-### 5. Per-Operation Latency
+### 4. Per-Operation Latency
 
 **Make target**: `make latency`
 **Binary**: `benchmarks/bench_latency.out`
@@ -166,6 +142,5 @@ Python scripts in `scripts/` generate PDF plots from the raw data:
 | Script                      | Experiment               | Output                    |
 |-----------------------------|--------------------------|---------------------------|
 | `plot_overhead.py`          | High/low contention      | `plots/overhead_benchmarks.pdf` |
-| `plot_overhead-any-of.py`   | 2-lock / 4-lock anylock  | `plots/anylock_benchmarks.pdf`  |
 | `plot_overhead-cslen.py`    | Critical section length  | `plots/exp_24_mar_cslen.pdf`    |
 | `plot_latency.py`           | Per-operation latency    | `plots/exp_24_mar_latency.pdf`  |
