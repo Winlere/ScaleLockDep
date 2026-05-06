@@ -123,6 +123,9 @@ int lockdep_lookup_or_create_lock_slot(pthread_mutex_t *mutex) {
     atomic_store_explicit(&g_lock_slots[new_lock_slot].owner_thread_slot,
                           LOCKDEP_INVALID_SLOT,
                           memory_order_relaxed);
+    atomic_store_explicit(&g_lock_slots[new_lock_slot].owner_acquire_pc,
+                          (uintptr_t)0,
+                          memory_order_relaxed);
     atomic_store_explicit(&g_lock_slot_count,
                           lock_slot_count + 1,
                           memory_order_release);
@@ -218,6 +221,9 @@ int lockdep_get_or_register_thread_slot(void) {
     g_thread_slots[new_thread_slot].tid = tid;
     atomic_store_explicit(&g_thread_slots[new_thread_slot].waiting_on_lock_slot,
                           LOCKDEP_INVALID_SLOT,
+                          memory_order_relaxed);
+    atomic_store_explicit(&g_thread_slots[new_thread_slot].waiting_on_pc,
+                          (uintptr_t)0,
                           memory_order_relaxed);
     atomic_store_explicit(&g_thread_slot_count,
                           thread_slot_count + 1,

@@ -72,6 +72,28 @@ LOCKDEP_DEBUG=1 LD_PRELOAD=$PWD/liblockdep.so ./test
 LOCKDEP_MODE=rb LD_PRELOAD=$PWD/liblockdep.so ./test
 ```
 
+## Reports
+
+Deadlock reports include lock slots, mutex addresses, participating thread
+slots, Linux thread IDs, and best-effort source locations for lock operations.
+
+For actual deadlocks, the report prints the live wait chain and annotates each
+edge with:
+
+- the thread waiting for a mutex
+- the source location of the blocking lock attempt
+- the thread that owns the mutex
+- the source location where the owner acquired that mutex
+
+For potential deadlocks, the report prints the new dependency edge, the existing
+dependency path that closes the cycle, and the thread/source location where each
+historical lock-order edge was observed.
+
+Source locations are resolved with `addr2line` on the reporting path. They are
+most useful when the target program is built with debug symbols such as `-g`.
+If source information is unavailable, the report falls back to symbols and raw
+addresses.
+
 ## Optimizations Compared With The Original Non-`rb` Backend
 
 The original non-`rb` design performs potential-deadlock graph updates

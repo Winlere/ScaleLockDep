@@ -13,6 +13,8 @@ typedef enum {
 
 typedef struct {
     int to_lock_slot;
+    int thread_slot;
+    uintptr_t acquire_pc;
     uint64_t from_bits[LOCKDEP_GRAPH_WORDS];
 } lockdep_potential_event_t;
 
@@ -26,6 +28,10 @@ static lockdep_potential_ring_t g_potential_rings[LOCKDEP_MAX_THREAD_SLOTS];
 static uint64_t g_rb_adjacency_bits[LOCKDEP_MAX_LOCK_SLOTS][LOCKDEP_GRAPH_WORDS];
 static uint64_t g_rb_predecessor_bits[LOCKDEP_MAX_LOCK_SLOTS][LOCKDEP_GRAPH_WORDS];
 static uint64_t g_rb_reachability_bits[LOCKDEP_MAX_LOCK_SLOTS][LOCKDEP_GRAPH_WORDS];
+static lockdep_edge_info_t
+    g_rb_edge_info[LOCKDEP_MAX_LOCK_SLOTS][LOCKDEP_MAX_LOCK_SLOTS];
+static lockdep_edge_info_t
+    g_rb_pending_edge_info[LOCKDEP_MAX_LOCK_SLOTS][LOCKDEP_MAX_LOCK_SLOTS];
 static _Atomic uint64_t
     g_rb_predecessor_snapshot[LOCKDEP_MAX_LOCK_SLOTS][LOCKDEP_GRAPH_WORDS];
 static pthread_t g_rb_worker;
@@ -68,9 +74,14 @@ static int lockdep_graph_has_any_bits(const uint64_t *bits) {
 }
 
 static void lockdep_global_on_acquire(int new_lock_slot,
-                                      const lockdep_thread_state_t *thread_state) {
+                                      const lockdep_thread_state_t *thread_state,
+                                      int thread_slot,
+                                      uintptr_t acquire_pc) {
     for (int i = 0; i < thread_state->held_lock_slot_count; i++) {
-        lockdep_add_edge_and_check_cycle(thread_state->held_lock_slots[i], new_lock_slot);
+        lockdep_add_edge_and_check_cycle(thread_state->held_lock_slots[i],
+                                         new_lock_slot,
+                                         thread_slot,
+                                         acquire_pc);
     }
 }
 
@@ -179,7 +190,8 @@ static void lockdep_rb_set_full_policy_from_env(const char *policy_env) {
 
 static void lockdep_rb_enqueue_edge_batch(int thread_slot,
                                           int to_lock_slot,
-                                          const uint64_t from_bits[LOCKDEP_GRAPH_WORDS]) {
+                                          const uint64_t from_bits[LOCKDEP_GRAPH_WORDS],
+                                          uintptr_t acquire_pc) {
     lockdep_potential_ring_t *ring = &g_potential_rings[thread_slot];
     unsigned int tail = atomic_load_explicit(&ring->tail, memory_order_relaxed);
 
@@ -200,6 +212,8 @@ static void lockdep_rb_enqueue_edge_batch(int thread_slot,
 
     lockdep_potential_event_t *event = &ring->events[tail % LOCKDEP_RB_CAPACITY];
     event->to_lock_slot = to_lock_slot;
+    event->thread_slot = thread_slot;
+    event->acquire_pc = acquire_pc;
     for (int word = 0; word < LOCKDEP_GRAPH_WORDS; word++) {
         event->from_bits[word] = from_bits[word];
     }
@@ -250,7 +264,9 @@ static int lockdep_rb_find_path(int cur_lock_slot,
     return 0;
 }
 
-static void lockdep_rb_report_cycle_if_any(int from_lock_slot, int to_lock_slot) {
+static void lockdep_rb_report_cycle_if_any(int from_lock_slot,
+                                           int to_lock_slot,
+                                           const lockdep_edge_info_t *new_edge_info) {
     if (!lockdep_graph_bit_test(g_rb_reachability_bits[to_lock_slot], from_lock_slot)) {
         return;
     }
@@ -259,6 +275,7 @@ static void lockdep_rb_report_cycle_if_any(int from_lock_slot, int to_lock_slot)
     int parent[LOCKDEP_MAX_LOCK_SLOTS];
     int reverse_chain[LOCKDEP_MAX_LOCK_SLOTS];
     int existing_chain[LOCKDEP_MAX_LOCK_SLOTS];
+    lockdep_edge_info_t existing_edge_infos[LOCKDEP_MAX_LOCK_SLOTS];
     int reverse_chain_len = 0;
     int existing_chain_len = 0;
     int cur_lock_slot = from_lock_slot;
@@ -287,11 +304,16 @@ static void lockdep_rb_report_cycle_if_any(int from_lock_slot, int to_lock_slot)
     for (int i = reverse_chain_len - 1; i >= 0; i--) {
         existing_chain[existing_chain_len++] = reverse_chain[i];
     }
+    for (int i = 0; i + 1 < existing_chain_len; i++) {
+        existing_edge_infos[i] = g_rb_edge_info[existing_chain[i]][existing_chain[i + 1]];
+    }
 
     lockdep_report_potential_deadlock(from_lock_slot,
                                       to_lock_slot,
                                       existing_chain,
-                                      existing_chain_len);
+                                      existing_chain_len,
+                                      new_edge_info,
+                                      existing_edge_infos);
 }
 
 static void lockdep_rb_update_reachability(int from_lock_slot, int to_lock_slot) {
@@ -315,14 +337,17 @@ static void lockdep_rb_update_reachability(int from_lock_slot, int to_lock_slot)
     }
 }
 
-static void lockdep_rb_add_edge_if_new(int from_lock_slot, int to_lock_slot) {
+static void lockdep_rb_add_edge_if_new(int from_lock_slot,
+                                       int to_lock_slot,
+                                       const lockdep_edge_info_t *edge_info) {
     if (from_lock_slot == to_lock_slot ||
         lockdep_graph_bit_test(g_rb_predecessor_bits[to_lock_slot], from_lock_slot)) {
         return;
     }
 
-    lockdep_rb_report_cycle_if_any(from_lock_slot, to_lock_slot);
+    lockdep_rb_report_cycle_if_any(from_lock_slot, to_lock_slot, edge_info);
     lockdep_graph_bit_set(g_rb_adjacency_bits[from_lock_slot], to_lock_slot);
+    g_rb_edge_info[from_lock_slot][to_lock_slot] = *edge_info;
     lockdep_graph_bit_set(g_rb_predecessor_bits[to_lock_slot], from_lock_slot);
     atomic_fetch_or_explicit(
         &g_rb_predecessor_snapshot[to_lock_slot][lockdep_graph_word_index(from_lock_slot)],
@@ -332,7 +357,8 @@ static void lockdep_rb_add_edge_if_new(int from_lock_slot, int to_lock_slot) {
 }
 
 static void lockdep_rb_process_edge_bits(int to_lock_slot,
-                                         const uint64_t from_bits[LOCKDEP_GRAPH_WORDS]) {
+                                         const uint64_t from_bits[LOCKDEP_GRAPH_WORDS],
+                                         const lockdep_edge_info_t *edge_infos) {
     int lock_slot_count = atomic_load_explicit(&g_lock_slot_count, memory_order_acquire);
 
     for (int word = 0; word < LOCKDEP_GRAPH_WORDS; word++) {
@@ -343,7 +369,9 @@ static void lockdep_rb_process_edge_bits(int to_lock_slot,
             int from_lock_slot = word * 64 + bit;
 
             if (from_lock_slot < lock_slot_count) {
-                lockdep_rb_add_edge_if_new(from_lock_slot, to_lock_slot);
+                lockdep_rb_add_edge_if_new(from_lock_slot,
+                                           to_lock_slot,
+                                           &edge_infos[from_lock_slot]);
             }
 
             bits &= bits - 1;
@@ -375,6 +403,23 @@ static int lockdep_rb_drain_once(void) {
             }
 
             for (int word = 0; word < LOCKDEP_GRAPH_WORDS; word++) {
+                uint64_t new_pending_bits =
+                    event.from_bits[word] & ~pending_from_bits[to_lock_slot][word];
+
+                while (new_pending_bits != 0) {
+                    int bit = __builtin_ctzll(new_pending_bits);
+                    int from_lock_slot = word * 64 + bit;
+
+                    if (from_lock_slot < LOCKDEP_MAX_LOCK_SLOTS) {
+                        g_rb_pending_edge_info[to_lock_slot][from_lock_slot].thread_slot =
+                            event.thread_slot;
+                        g_rb_pending_edge_info[to_lock_slot][from_lock_slot].acquire_pc =
+                            event.acquire_pc;
+                    }
+
+                    new_pending_bits &= new_pending_bits - 1;
+                }
+
                 pending_from_bits[to_lock_slot][word] |= event.from_bits[word];
             }
         }
@@ -383,7 +428,9 @@ static int lockdep_rb_drain_once(void) {
     for (int i = 0; i < pending_to_lock_count; i++) {
         int to_lock_slot = pending_to_locks[i];
 
-        lockdep_rb_process_edge_bits(to_lock_slot, pending_from_bits[to_lock_slot]);
+        lockdep_rb_process_edge_bits(to_lock_slot,
+                                     pending_from_bits[to_lock_slot],
+                                     g_rb_pending_edge_info[to_lock_slot]);
     }
 
     return made_progress;
@@ -464,13 +511,17 @@ void lockdep_potential_shutdown(void) {
 
 void lockdep_potential_on_acquire(int thread_slot,
                                   int new_lock_slot,
-                                  const lockdep_thread_state_t *thread_state) {
+                                  const lockdep_thread_state_t *thread_state,
+                                  uintptr_t acquire_pc) {
     uint64_t unknown_predecessors[LOCKDEP_GRAPH_WORDS];
 
     if (g_lockdep_mode == LOCKDEP_MODE_GLOBAL) {
         if (thread_state->held_lock_slot_count > 0 &&
             lockdep_global_has_unknown_predecessor(thread_state, new_lock_slot)) {
-            lockdep_global_on_acquire(new_lock_slot, thread_state);
+            lockdep_global_on_acquire(new_lock_slot,
+                                      thread_state,
+                                      thread_slot,
+                                      acquire_pc);
         }
         return;
     }
@@ -486,5 +537,8 @@ void lockdep_potential_on_acquire(int thread_slot,
     }
 
     lockdep_rb_ensure_worker_started();
-    lockdep_rb_enqueue_edge_batch(thread_slot, new_lock_slot, unknown_predecessors);
+    lockdep_rb_enqueue_edge_batch(thread_slot,
+                                  new_lock_slot,
+                                  unknown_predecessors,
+                                  acquire_pc);
 }

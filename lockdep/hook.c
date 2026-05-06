@@ -87,12 +87,13 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
         return real_pthread_mutex_lock(mutex);
     }
     lockdep_hooked = 1;
+    uintptr_t callsite = LOCKDEP_CALLSITE();
 
     if (tls_thread_state.held_lock_slot_count == 0) {
         int rc = real_pthread_mutex_lock(mutex);
         if (rc == 0) {
             lockdep_debug_log_lock_event("lock", mutex, rc);
-            lockdep_acquire_top_level_mutex_fast(mutex);
+            lockdep_acquire_top_level_mutex_fast(mutex, callsite);
         } else {
             lockdep_debug_log_lock_event("lock-fail", mutex, rc);
         }
@@ -104,13 +105,13 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
     int rc = real_pthread_mutex_trylock(mutex);
     if (rc == 0) {
         lockdep_debug_log_lock_event("lock", mutex, rc);
-        lockdep_acquire_mutex(mutex, 0);
+        lockdep_acquire_mutex(mutex, 0, callsite);
         lockdep_hooked = 0;
         return 0;
     }
 
     if (rc == EBUSY) {
-        if (lockdep_before_blocking_mutex_lock(mutex)) {
+        if (lockdep_before_blocking_mutex_lock(mutex, callsite)) {
             lockdep_hooked = 0;
             _exit(66);
         }
@@ -118,7 +119,7 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
         rc = real_pthread_mutex_lock(mutex);
         if (rc == 0) {
             lockdep_debug_log_lock_event("lock", mutex, rc);
-            lockdep_acquire_mutex(mutex, 1);
+            lockdep_acquire_mutex(mutex, 1, callsite);
         } else {
             lockdep_debug_log_lock_event("lock-fail", mutex, rc);
             lockdep_cancel_wait();
@@ -172,14 +173,15 @@ int pthread_mutex_trylock(pthread_mutex_t *mutex) {
         return real_pthread_mutex_trylock(mutex);
     }
     lockdep_hooked = 1;
+    uintptr_t callsite = LOCKDEP_CALLSITE();
 
     int rc = real_pthread_mutex_trylock(mutex);
     if (rc == 0) {
         lockdep_debug_log_lock_event("trylock-success", mutex, rc);
         if (tls_thread_state.held_lock_slot_count == 0) {
-            lockdep_acquire_top_level_mutex_fast(mutex);
+            lockdep_acquire_top_level_mutex_fast(mutex, callsite);
         } else {
-            lockdep_acquire_mutex(mutex, 0);
+            lockdep_acquire_mutex(mutex, 0, callsite);
         }
     } else if (rc == EBUSY) {
         lockdep_debug_log_lock_event("trylock-busy", mutex, rc);
