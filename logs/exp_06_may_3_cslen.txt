@@ -1,0 +1,98 @@
+Experiment: Overhead Microbenchmarks - Critical Section Length
+Date: 2026-05-06
+Commit ID: 69e5e0c
+
+--- Settings ---
+
+Machine
+  OS       : Linux 7.0.3-arch1-1 x86_64
+  CPU      : 11th Gen Intel(R) Core(TM) i7-11700 @ 2.50GHz (128 cores / 16 threads)
+  Memory   : 15 GiB RAM
+
+Software
+  Compiler : gcc (-Wall -Wextra -pthread; lockdep: -O3 -g -flto
+             -fno-semantic-interposition)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : 69e5e0c69de13056ad5ff71dab2eddd0f191f28a
+
+--- Parameters ---
+
+Benchmark binary : benchmarks/bench_overhead_cslen.out
+Invocation       : bench_overhead_cslen.out <num_threads> <iters> <cs_ns>
+Threads          : 8 (fixed)
+Locks            : 1 shared lock
+Iterations       : 100000 per thread
+CS hold times    : 0 10 20 30 50 75 100 150 200 300 500 750 1000 10000 100000
+Metric           : ops_per_sec  (total lock acquisitions / wall time)
+
+Scenario
+  1 shared lock, 8 threads. Each iteration: lock, busy-spin for <cs_ns>
+  nanoseconds inside the critical section, unlock. The busy-spin is
+  calibrated at startup via a trial loop.
+
+Conditions
+  baseline      : no LD_PRELOAD
+  lockdep/glob  : LOCKDEP_MODE=global LD_PRELOAD=./lockdep/liblockdep.so
+  ScaleLockDep  : LOCKDEP_MODE=rb     LD_PRELOAD=./lockdep/liblockdep.so
+
+lockdep limits (lockdep.h)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+Critical section length - baseline
+threads	iters	cs_ns	wall_ns	total_ops	ops_per_sec
+8	100000	0	65848883	800000	12149029
+8	100000	10	65547052	800000	12204973
+8	100000	20	80338175	800000	9957906
+8	100000	30	108501018	800000	7373203
+8	100000	50	195536525	800000	4091307
+8	100000	75	233487475	800000	3426308
+8	100000	100	250132916	800000	3198300
+8	100000	150	300732676	800000	2660170
+8	100000	200	402964947	800000	1985284
+8	100000	300	436741007	800000	1831749
+8	100000	500	774380057	800000	1033084
+8	100000	750	827906577	800000	966293
+8	100000	1000	1101406335	800000	726344
+8	100000	10000	7822622315	800000	102267
+8	100000	100000	77204647289	800000	10362
+
+Critical section length - lockdep global
+threads	iters	cs_ns	wall_ns	total_ops	ops_per_sec
+8	100000	0	114431220	800000	6991099
+8	100000	10	126137518	800000	6342284
+8	100000	20	139842447	800000	5720724
+8	100000	30	164163646	800000	4873186
+8	100000	50	206893659	800000	3866721
+8	100000	75	245711565	800000	3255850
+8	100000	100	274390858	800000	2915549
+8	100000	150	365886216	800000	2186472
+8	100000	200	379681390	800000	2107030
+8	100000	300	458499789	800000	1744821
+8	100000	500	683161102	800000	1171027
+8	100000	750	929228677	800000	860929
+8	100000	1000	1183069229	800000	676207
+8	100000	10000	7860848904	800000	101770
+8	100000	100000	72350856583	800000	11057
+
+Critical section length - lockdep rb (ScaleLockDep)
+threads	iters	cs_ns	wall_ns	total_ops	ops_per_sec
+8	100000	0	120213003	800000	6654854
+8	100000	10	134180178	800000	5962132
+8	100000	20	136182280	800000	5874479
+8	100000	30	161912757	800000	4940932
+8	100000	50	202855652	800000	3943691
+8	100000	75	243284430	800000	3288332
+8	100000	100	266914109	800000	2997219
+8	100000	150	326085691	800000	2453343
+8	100000	200	412144488	800000	1941067
+8	100000	300	436092240	800000	1834474
+8	100000	500	590074234	800000	1355762
+8	100000	750	960197073	800000	833162
+8	100000	1000	1173167291	800000	681915
+8	100000	10000	7631186732	800000	104833
+8	100000	100000	76257112439	800000	10491
+

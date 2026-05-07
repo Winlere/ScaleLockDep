@@ -1,0 +1,103 @@
+Experiment: Overhead Microbenchmarks (High/Low Contention)
+Date: 2026-05-06
+Commit ID: 93e1cdc
+
+--- Settings ---
+
+Machine
+  OS       : Linux 7.0.3-arch1-1 x86_64
+  CPU      : 11th Gen Intel(R) Core(TM) i7-11700 @ 2.50GHz (128 cores / 16 threads)
+  Memory   : 15 GiB RAM
+
+Software
+  Compiler : gcc (-Wall -Wextra -pthread; lockdep: -O3 -g -flto
+             -fno-semantic-interposition)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : 93e1cdc2a753f95dd4b5bdd3b83c376bfd1710a7
+
+--- Parameters ---
+
+Benchmark binary : benchmarks/bench_overhead.out
+Invocation       : bench_overhead.out <num_threads> <num_locks> <iters_per_thread>
+Thread counts    : 1 2 4 8 16 32 64
+Iterations       : 100000 per thread
+Metric           : ops_per_sec  (total lock/unlock pairs / wall time)
+
+Scenarios
+  high-contention : num_locks = 1           (all threads share one lock)
+  low-contention  : num_locks = num_threads (each thread owns its own lock,
+                                             isolates lockdep tracking overhead
+                                             from application synchronization)
+
+Conditions per scenario
+  baseline      : no LD_PRELOAD
+  lockdep/glob  : LOCKDEP_MODE=global LD_PRELOAD=./lockdep/liblockdep.so
+  ScaleLockDep  : LOCKDEP_MODE=rb     LD_PRELOAD=./lockdep/liblockdep.so
+
+lockdep limits (lockdep.h)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+High-contention (1 shared lock) - baseline
+threads	locks	iters	wall_ns	total_ops	ops_per_sec
+1	1	100000	3850984	100000	25967389
+2	1	100000	16296759	200000	12272379
+4	1	100000	25044592	400000	15971512
+8	1	100000	47144160	800000	16969228
+16	1	100000	108192302	1600000	14788483
+32	1	100000	220297688	3200000	14525799
+64	1	100000	422357424	6400000	15153043
+
+High-contention (1 shared lock) - lockdep global
+threads	locks	iters	wall_ns	total_ops	ops_per_sec
+1	1	100000	2893665	100000	34558251
+2	1	100000	22131238	200000	9037000
+4	1	100000	41552391	400000	9626402
+8	1	100000	114407822	800000	6992529
+16	1	100000	248013411	1600000	6451264
+32	1	100000	497871671	3200000	6427359
+64	1	100000	987988766	6400000	6477806
+
+High-contention (1 shared lock) - lockdep rb (ScaleLockDep)
+threads	locks	iters	wall_ns	total_ops	ops_per_sec
+1	1	100000	3086687	100000	32397195
+2	1	100000	23052820	200000	8675728
+4	1	100000	42410000	400000	9431738
+8	1	100000	117456471	800000	6811034
+16	1	100000	261497191	1600000	6118613
+32	1	100000	511756335	3200000	6252976
+64	1	100000	1034666188	6400000	6185570
+
+Low-contention (locks = threads) - baseline
+threads	locks	iters	wall_ns	total_ops	ops_per_sec
+1	1	100000	1338597	100000	74705083
+2	2	100000	19498217	400000	20514696
+4	4	100000	78824106	1600000	20298359
+8	8	100000	232231952	6400000	27558654
+16	16	100000	555430622	25600000	46090365
+32	32	100000	1423478278	102400000	71936468
+64	64	100000	3945012211	409600000	103827309
+
+Low-contention (locks = threads) - lockdep global
+threads	locks	iters	wall_ns	total_ops	ops_per_sec
+1	1	100000	2975754	100000	33604928
+2	2	100000	43845906	400000	9122859
+4	4	100000	131152153	1600000	12199571
+8	8	100000	381378097	6400000	16781247
+16	16	100000	844284298	25600000	30321540
+32	32	100000	2261531754	102400000	45279046
+64	64	100000	6691187623	409600000	61214843
+
+Low-contention (locks = threads) - lockdep rb (ScaleLockDep)
+threads	locks	iters	wall_ns	total_ops	ops_per_sec
+1	1	100000	3236734	100000	30895341
+2	2	100000	41553179	400000	9626219
+4	4	100000	131651918	1600000	12153260
+8	8	100000	377461401	6400000	16955376
+16	16	100000	879342057	25600000	29112676
+32	32	100000	2461051567	102400000	41608230
+64	64	100000	7567728091	409600000	54124566
+

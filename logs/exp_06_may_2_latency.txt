@@ -1,0 +1,78 @@
+Experiment: Per-Operation Latency - Lock Acquire and Release Delay
+Date: 2026-05-06
+Commit ID: 93e1cdc
+
+--- Settings ---
+
+Machine
+  OS       : Linux 7.0.3-arch1-1 x86_64
+  CPU      : 11th Gen Intel(R) Core(TM) i7-11700 @ 2.50GHz (128 cores / 16 threads)
+  Memory   : 15 GiB RAM
+
+Software
+  Compiler : gcc (-Wall -Wextra -pthread; lockdep: -O3 -g -flto
+             -fno-semantic-interposition)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : 93e1cdc2a753f95dd4b5bdd3b83c376bfd1710a7
+
+--- Parameters ---
+
+Benchmark binary : benchmarks/bench_latency.out
+Invocation       : bench_latency.out <num_threads> <iters_per_thread>
+Thread counts    : 1 2 4 8 16 32 64
+Iterations       : 100000 per thread
+Locks            : 1 shared lock
+Metric           : average nanoseconds per operation (lock, unlock, pair)
+
+Scenario
+  1 shared lock, varying thread counts. Each iteration: time lock, time
+  unlock, accumulate separately. Reports per-thread averages aggregated
+  across all threads.
+
+  Note: clock_gettime(CLOCK_MONOTONIC) adds ~15-25 ns of measurement
+  overhead per call. This overhead is consistent across baseline and
+  lockdep, so the *difference* between conditions is accurate. Absolute
+  values include this measurement cost.
+
+Conditions
+  baseline      : no LD_PRELOAD
+  lockdep/glob  : LOCKDEP_MODE=global LD_PRELOAD=./lockdep/liblockdep.so
+  ScaleLockDep  : LOCKDEP_MODE=rb     LD_PRELOAD=./lockdep/liblockdep.so
+
+lockdep limits (lockdep.h)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+baseline
+threads	iters	avg_lock_ns	avg_unlock_ns	avg_pair_ns
+1	100000	18.7	17.9	36.6
+2	100000	117.8	103.5	221.3
+4	100000	303.6	185.8	489.4
+8	100000	656.7	456.2	1113.0
+16	100000	1315.1	1109.9	2425.0
+32	100000	3128.0	1657.5	4785.6
+64	100000	8111.7	1673.9	9785.6
+
+lockdep global
+threads	iters	avg_lock_ns	avg_unlock_ns	avg_pair_ns
+1	100000	25.8	30.9	56.6
+2	100000	139.9	159.0	298.9
+4	100000	335.8	259.2	595.0
+8	100000	854.3	587.5	1441.8
+16	100000	1902.6	1391.5	3294.1
+32	100000	4185.6	2222.7	6408.3
+64	100000	10801.0	2148.6	12949.5
+
+lockdep rb (ScaleLockDep)
+threads	iters	avg_lock_ns	avg_unlock_ns	avg_pair_ns
+1	100000	26.1	32.2	58.3
+2	100000	141.8	163.4	305.2
+4	100000	322.2	248.3	570.5
+8	100000	906.8	601.3	1508.1
+16	100000	1942.5	1379.7	3322.2
+32	100000	4395.5	2093.6	6489.1
+64	100000	10923.2	2098.8	13022.0
+
