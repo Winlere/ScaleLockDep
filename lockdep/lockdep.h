@@ -98,6 +98,7 @@ extern __thread int tls_thread_slot;
 extern __thread lockdep_lock_slot_cache_entry_t
     tls_lock_slot_cache[LOCKDEP_TLS_LOCK_CACHE_SIZE];
 extern int g_debug_enabled;
+extern int g_report_sites_enabled;
 extern lockdep_mode_t g_lockdep_mode;
 
 /* Logging */
@@ -173,6 +174,34 @@ static inline int lockdep_current_thread_slot(void) {
     return lockdep_get_or_register_thread_slot();
 }
 
+static inline uintptr_t lockdep_capture_callsite_if_enabled(void) {
+    if (!LOCKDEP_UNLIKELY(g_report_sites_enabled)) {
+        return (uintptr_t)0;
+    }
+
+    return LOCKDEP_CALLSITE();
+}
+
+static inline void lockdep_store_owner_acquire_pc(int lock_slot, uintptr_t acquire_pc) {
+    if (!LOCKDEP_UNLIKELY(g_report_sites_enabled)) {
+        return;
+    }
+
+    atomic_store_explicit(&g_lock_slots[lock_slot].owner_acquire_pc,
+                          acquire_pc,
+                          memory_order_release);
+}
+
+static inline void lockdep_clear_owner_acquire_pc(int lock_slot) {
+    if (!LOCKDEP_UNLIKELY(g_report_sites_enabled)) {
+        return;
+    }
+
+    atomic_store_explicit(&g_lock_slots[lock_slot].owner_acquire_pc,
+                          (uintptr_t)0,
+                          memory_order_release);
+}
+
 static inline void lockdep_note_thread_holds_lock_slot(int lock_slot) {
     if (g_lockdep_mode != LOCKDEP_MODE_RB) {
         return;
@@ -229,9 +258,7 @@ static inline void lockdep_acquire_top_level_mutex_fast(pthread_mutex_t *mutex,
     tls_thread_state.held_lock_slots[0] = lock_slot;
     tls_thread_state.held_lock_slot_count = 1;
     lockdep_note_thread_holds_lock_slot(lock_slot);
-    atomic_store_explicit(&g_lock_slots[lock_slot].owner_acquire_pc,
-                          acquire_pc,
-                          memory_order_release);
+    lockdep_store_owner_acquire_pc(lock_slot, acquire_pc);
     atomic_store_explicit(&g_lock_slots[lock_slot].owner_thread_slot,
                           self_thread_slot,
                           memory_order_release);
@@ -256,9 +283,7 @@ static inline int lockdep_release_top_level_mutex_fast(pthread_mutex_t *mutex) {
                                                 LOCKDEP_INVALID_SLOT,
                                                 memory_order_acq_rel,
                                                 memory_order_acquire)) {
-        atomic_store_explicit(&g_lock_slots[lock_slot].owner_acquire_pc,
-                              (uintptr_t)0,
-                              memory_order_release);
+        lockdep_clear_owner_acquire_pc(lock_slot);
     }
     lockdep_note_thread_releases_lock_slot(lock_slot);
     tls_thread_state.held_lock_slot_count = 0;

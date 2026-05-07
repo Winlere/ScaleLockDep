@@ -19,6 +19,7 @@ __thread lockdep_lock_slot_cache_entry_t
 
 /* Runtime config */
 int g_debug_enabled = 0;
+int g_report_sites_enabled = 0;
 
 static unsigned int lockdep_tls_lock_cache_index(pthread_mutex_t *mutex) {
     uintptr_t addr = (uintptr_t)mutex;

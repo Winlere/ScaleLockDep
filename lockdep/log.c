@@ -247,7 +247,9 @@ void lockdep_report_potential_deadlock(int from_lock_slot,
     dprintf(2, " -> ");
     lockdep_print_lock_slot(to_lock_slot);
     dprintf(2, "\n");
-    lockdep_print_edge_info("[LOCKDEP]   observed by ", new_edge_info);
+    if (LOCKDEP_UNLIKELY(g_report_sites_enabled)) {
+        lockdep_print_edge_info("[LOCKDEP]   observed by ", new_edge_info);
+    }
 
     if (existing_chain_len > 0) {
         dprintf(2, "[LOCKDEP] existing chain: ");
@@ -259,14 +261,16 @@ void lockdep_report_potential_deadlock(int from_lock_slot,
         }
         dprintf(2, "\n");
 
-        for (int i = 0; i + 1 < existing_chain_len; i++) {
-            dprintf(2, "[LOCKDEP]   edge ");
-            lockdep_print_lock_slot(existing_chain[i]);
-            dprintf(2, " -> ");
-            lockdep_print_lock_slot(existing_chain[i + 1]);
-            dprintf(2, "\n");
-            lockdep_print_edge_info("[LOCKDEP]     observed by ",
-                                    &existing_edge_infos[i]);
+        if (LOCKDEP_UNLIKELY(g_report_sites_enabled)) {
+            for (int i = 0; i + 1 < existing_chain_len; i++) {
+                dprintf(2, "[LOCKDEP]   edge ");
+                lockdep_print_lock_slot(existing_chain[i]);
+                dprintf(2, " -> ");
+                lockdep_print_lock_slot(existing_chain[i + 1]);
+                dprintf(2, "\n");
+                lockdep_print_edge_info("[LOCKDEP]     observed by ",
+                                        &existing_edge_infos[i]);
+            }
         }
 
         dprintf(2, "[LOCKDEP] cycle: ");
@@ -299,6 +303,11 @@ void lockdep_report_actual_deadlock(const int *thread_chain,
     if (edge_count > 0) {
         dprintf(2, " ");
         lockdep_print_thread_slot(thread_chain[0]);
+        if (!LOCKDEP_UNLIKELY(g_report_sites_enabled)) {
+            dprintf(2, "[LOCKDEP] ========================================\n");
+            return;
+        }
+
         for (int i = 0; i < edge_count; i++) {
             dprintf(2, " -> ");
             lockdep_print_lock_slot(lock_chain[i]);

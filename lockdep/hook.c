@@ -55,8 +55,10 @@ __attribute__((constructor))
 static void lockdep_ctor(void) {
     const char *debug_env = getenv("LOCKDEP_DEBUG");
     const char *mode_env = getenv("LOCKDEP_MODE");
+    const char *report_sites_env = getenv("LOCKDEP_REPORT_SITES");
 
     g_debug_enabled = (debug_env && atoi(debug_env) != 0);
+    g_report_sites_enabled = (report_sites_env && atoi(report_sites_env) != 0);
     lockdep_set_mode_from_env(mode_env);
     lockdep_init_real_functions();
     lockdep_potential_init();
@@ -87,7 +89,7 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
         return real_pthread_mutex_lock(mutex);
     }
     lockdep_hooked = 1;
-    uintptr_t callsite = LOCKDEP_CALLSITE();
+    uintptr_t callsite = lockdep_capture_callsite_if_enabled();
 
     if (tls_thread_state.held_lock_slot_count == 0) {
         int rc = real_pthread_mutex_lock(mutex);
@@ -173,7 +175,7 @@ int pthread_mutex_trylock(pthread_mutex_t *mutex) {
         return real_pthread_mutex_trylock(mutex);
     }
     lockdep_hooked = 1;
-    uintptr_t callsite = LOCKDEP_CALLSITE();
+    uintptr_t callsite = lockdep_capture_callsite_if_enabled();
 
     int rc = real_pthread_mutex_trylock(mutex);
     if (rc == 0) {

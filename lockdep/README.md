@@ -38,6 +38,9 @@ Runtime environment variables:
 
 - `LOCKDEP_DEBUG=1`: enable verbose debug logging. By default the library stays
   quiet except for deadlock reports.
+- `LOCKDEP_REPORT_SITES=1`: enable source-location tracking for report output.
+  This records lock acquisition call sites on the lock/unlock hot path, so it is
+  useful for debugging and demos but disabled by default for performance runs.
 - `LOCKDEP_MODE=global`: run synchronous graph updates in the lock path.
 - `LOCKDEP_MODE=rb`: enqueue nested lock-order edge batches into per-thread ring
   buffers and let a background worker build the graph and detect cycles
@@ -75,7 +78,8 @@ LOCKDEP_MODE=rb LD_PRELOAD=$PWD/liblockdep.so ./test
 ## Reports
 
 Deadlock reports include lock slots, mutex addresses, participating thread
-slots, Linux thread IDs, and best-effort source locations for lock operations.
+slots, and Linux thread IDs. With `LOCKDEP_REPORT_SITES=1`, reports also include
+best-effort source locations for lock operations.
 
 For actual deadlocks, the report prints the live wait chain and annotates each
 edge with:
@@ -89,10 +93,10 @@ For potential deadlocks, the report prints the new dependency edge, the existing
 dependency path that closes the cycle, and the thread/source location where each
 historical lock-order edge was observed.
 
-Source locations are resolved with `addr2line` on the reporting path. They are
-most useful when the target program is built with debug symbols such as `-g`.
-If source information is unavailable, the report falls back to symbols and raw
-addresses.
+Source locations are resolved with `addr2line` on the reporting path after site
+tracking is enabled. They are most useful when the target program is built with
+debug symbols such as `-g`. If source information is unavailable, the report
+falls back to symbols and raw addresses.
 
 ## Optimizations Compared With The Original Non-`rb` Backend
 

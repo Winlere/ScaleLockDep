@@ -32,6 +32,10 @@ static lockdep_edge_info_t
     g_rb_edge_info[LOCKDEP_MAX_LOCK_SLOTS][LOCKDEP_MAX_LOCK_SLOTS];
 static lockdep_edge_info_t
     g_rb_pending_edge_info[LOCKDEP_MAX_LOCK_SLOTS][LOCKDEP_MAX_LOCK_SLOTS];
+static const lockdep_edge_info_t g_unknown_edge_info = {
+    .thread_slot = LOCKDEP_INVALID_SLOT,
+    .acquire_pc = (uintptr_t)0,
+};
 static _Atomic uint64_t
     g_rb_predecessor_snapshot[LOCKDEP_MAX_LOCK_SLOTS][LOCKDEP_GRAPH_WORDS];
 static pthread_t g_rb_worker;
@@ -369,9 +373,15 @@ static void lockdep_rb_process_edge_bits(int to_lock_slot,
             int from_lock_slot = word * 64 + bit;
 
             if (from_lock_slot < lock_slot_count) {
+                const lockdep_edge_info_t *edge_info = &g_unknown_edge_info;
+
+                if (edge_infos) {
+                    edge_info = &edge_infos[from_lock_slot];
+                }
+
                 lockdep_rb_add_edge_if_new(from_lock_slot,
                                            to_lock_slot,
-                                           &edge_infos[from_lock_slot]);
+                                           edge_info);
             }
 
             bits &= bits - 1;
@@ -403,8 +413,12 @@ static int lockdep_rb_drain_once(void) {
             }
 
             for (int word = 0; word < LOCKDEP_GRAPH_WORDS; word++) {
-                uint64_t new_pending_bits =
-                    event.from_bits[word] & ~pending_from_bits[to_lock_slot][word];
+                uint64_t new_pending_bits = 0;
+
+                if (LOCKDEP_UNLIKELY(event.acquire_pc != (uintptr_t)0)) {
+                    new_pending_bits =
+                        event.from_bits[word] & ~pending_from_bits[to_lock_slot][word];
+                }
 
                 while (new_pending_bits != 0) {
                     int bit = __builtin_ctzll(new_pending_bits);
@@ -427,10 +441,14 @@ static int lockdep_rb_drain_once(void) {
 
     for (int i = 0; i < pending_to_lock_count; i++) {
         int to_lock_slot = pending_to_locks[i];
+        const lockdep_edge_info_t *edge_infos = NULL;
 
+        if (LOCKDEP_UNLIKELY(g_report_sites_enabled)) {
+            edge_infos = g_rb_pending_edge_info[to_lock_slot];
+        }
         lockdep_rb_process_edge_bits(to_lock_slot,
                                      pending_from_bits[to_lock_slot],
-                                     g_rb_pending_edge_info[to_lock_slot]);
+                                     edge_infos);
     }
 
     return made_progress;
