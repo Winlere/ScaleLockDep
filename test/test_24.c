@@ -1,11 +1,9 @@
 /*
- * TEST 24: Layered Lock Inversion (Real-World Pattern)
- * Category: DEADLOCK
  * Description: Models the lock-layer inversion bug class documented by
  * Engler & Ashcraft (RacerX, SOSP 2003). A correct thread acquires the
  * high-level lock H before the low-level lock L; a second thread acquires
  * them in the opposite order (L then H), creating a cycle H→L→H.
- * Expected: DEADLOCKS
+ * Expected: deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -16,7 +14,6 @@ static pthread_mutex_t L = PTHREAD_MUTEX_INITIALIZER; /* low-level lock  */
 
 void* correct_layer(void* arg) {
     (void)arg;
-    printf("[T1] correct order: H then L\n");
     pthread_mutex_lock(&H);
     usleep(200000);
     pthread_mutex_lock(&L);  /* waits if T2 already holds L */
@@ -27,7 +24,6 @@ void* correct_layer(void* arg) {
 
 void* inverted_layer(void* arg) {
     (void)arg;
-    printf("[T2] INVERTED order: L then H\n");
     pthread_mutex_lock(&L);
     usleep(200000);
     pthread_mutex_lock(&H);  /* waits if T1 already holds H */

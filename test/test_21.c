@@ -1,11 +1,9 @@
 /*
- * TEST 21: Sequential Non-Nested Lock Acquisition
- * Category: NON-DEADLOCK
  * Description: 4 threads each cycle through 3 locks sequentially, fully
  * releasing each before acquiring the next. Because no thread ever holds
  * more than one lock at a time, the "hold-and-wait" Coffman condition is
  * never satisfied and circular wait is structurally impossible.
- * Expected: Completes successfully
+ * Expected: no deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>

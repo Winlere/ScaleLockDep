@@ -1,11 +1,9 @@
 /*
- * TEST 22: Trylock Readers + Blocking Writer
- * Category: NON-DEADLOCK
  * Description: 4 reader threads use pthread_mutex_trylock with a short
  * nanosleep backoff; 1 writer uses blocking pthread_mutex_lock. No thread
  * ever nests multiple locks, so the dependency graph never acquires any
  * edges and no cycle is possible despite the mixed trylock/blocking access.
- * Expected: Completes successfully
+ * Expected: no deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>

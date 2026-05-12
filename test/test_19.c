@@ -1,11 +1,9 @@
 /*
- * TEST 19: Scaled Ordered Locking (16 threads, 4 locks)
- * Category: NON-DEADLOCK
  * Description: 16 threads each acquire 4 locks in the same fixed order
  * A→B→C→D. Consistent lock ordering is the canonical prevention strategy
  * for circular wait (Coffman et al. 1971). Scales test_04 to verify the
  * detector's correctness under a larger thread count.
- * Expected: Completes successfully
+ * Expected: no deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>

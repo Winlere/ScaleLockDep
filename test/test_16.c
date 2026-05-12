@@ -1,6 +1,4 @@
 /*
- * TEST 16: Asymmetric Deadlock Pattern
- * Category: MIXED DEADLOCK
  * Description: Three threads where pairs are safe, but all three together deadlock.
  * T1 and T2 can safely run (they use A and B in same order)
  * T1 and T3 can safely run (they use different locks)
@@ -8,7 +6,7 @@
  * T1: lock A -> lock B
  * T2: lock B -> lock A (deadlock with T1)
  * T3: lock B -> lock C (partial interaction)
- * Expected: DEADLOCKS due to cycle between T1 and T2
+ * Expected: deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -20,52 +18,37 @@ static pthread_mutex_t C = PTHREAD_MUTEX_INITIALIZER;
 
 void* worker1(void* arg) {
     (void)arg;
-    printf("[T1] locking A\n");
     pthread_mutex_lock(&A);
-    printf("[T1] locked A\n");
     usleep(150000);
 
-    printf("[T1] locking B\n");
     pthread_mutex_lock(&B);
-    printf("[T1] locked B\n");
 
     pthread_mutex_unlock(&B);
     pthread_mutex_unlock(&A);
-    printf("[T1] done\n");
     return NULL;
 }
 
 void* worker2(void* arg) {
     (void)arg;
-    printf("[T2] locking B\n");
     pthread_mutex_lock(&B);
-    printf("[T2] locked B\n");
     usleep(150000);
 
-    printf("[T2] locking A\n");
     pthread_mutex_lock(&A);  // Deadlock with T1
-    printf("[T2] locked A\n");
 
     pthread_mutex_unlock(&A);
     pthread_mutex_unlock(&B);
-    printf("[T2] done\n");
     return NULL;
 }
 
 void* worker3(void* arg) {
     (void)arg;
-    printf("[T3] locking B\n");
     pthread_mutex_lock(&B);
-    printf("[T3] locked B\n");
     usleep(150000);
 
-    printf("[T3] locking C\n");
     pthread_mutex_lock(&C);
-    printf("[T3] locked C\n");
 
     pthread_mutex_unlock(&C);
     pthread_mutex_unlock(&B);
-    printf("[T3] done\n");
     return NULL;
 }
 

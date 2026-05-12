@@ -1,12 +1,10 @@
 /*
- * TEST 27: Seeded-Random Lock Ordering
- * Category: DUBIOUS
  * Description: 4 threads each use a fixed but TID-seeded permutation of 4
  * locks (computed via an LCG shuffle). Different permutations create
  * conflicting dependency edges in the lock graph; the detector exits early
  * (rc=66) when it finds the first potential cycle. An actual hang depends on
  * scheduling, but the ordering hazard is structurally guaranteed.
- * Expected: Potential deadlock detected (may not hang)
+ * Expected: potential deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>

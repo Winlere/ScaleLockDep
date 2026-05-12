@@ -1,11 +1,9 @@
 /*
- * TEST 25: 6-Thread Hexagon Deadlock
- * Category: DEADLOCK
  * Description: 6 threads form a circular wait of length 6: T1:A→B, T2:B→C,
  * T3:C→D, T4:D→E, T5:E→F, T6:F→A. Each thread acquires its first lock and
  * sleeps before trying its second, ensuring all six hold their first lock
  * simultaneously and then block — a hexagonal deadlock cycle.
- * Expected: DEADLOCKS
+ * Expected: deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>

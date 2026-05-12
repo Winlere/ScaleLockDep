@@ -1,13 +1,11 @@
 /*
- * TEST 13: Dubious Role-Based Lock Order
- * Category: DUBIOUS
  * Description: Each thread is assigned a "role" by its ID (mod 3), giving it a
  *   fixed pair of locks to acquire.  The code looks disciplined — no randomness,
  *   each thread has a clear, predictable responsibility.  A reviewer might reason
  *   "every thread has a consistent order, so there can be no cycle."  But the
  *   three roles collectively form a closed cycle: A→B (role 0), B→C (role 1),
  *   C→A (role 2).  The graph-level cycle is unambiguous; lockdep will catch it.
- * Expected: DEADLOCK detected (A→B→C→A cycle in the lock graph)
+ * Expected: potential deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -41,7 +39,6 @@ void* worker(void* arg) {
             pthread_mutex_unlock(&A);
             pthread_mutex_unlock(&C);
         }
-        printf("[T%ld] Completed iteration %d\n", tid, i);
     }
     return NULL;
 }

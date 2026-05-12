@@ -1,11 +1,9 @@
 /*
- * TEST 18: Producer-Consumer with Condition Variable
- * Category: NON-DEADLOCK
  * Description: 2 producer threads enqueue items into a bounded buffer; 2
  * consumer threads dequeue them using a single mutex + pthread_cond_wait.
  * pthread_cond_wait releases the mutex atomically, so no thread ever holds
  * two locks simultaneously and no circular dependency can form.
- * Expected: Completes successfully
+ * Expected: no deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>

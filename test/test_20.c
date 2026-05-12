@@ -1,11 +1,9 @@
 /*
- * TEST 20: Per-Thread Local Lock → Shared Global Lock Hierarchy
- * Category: NON-DEADLOCK
  * Description: 8 threads each hold a private local mutex for per-thread work,
  * then acquire a single shared global mutex to update a counter. All threads
  * follow the same local[i]→global hierarchy, so the dependency graph is a
  * DAG (star topology) with no cycle possible.
- * Expected: Completes successfully
+ * Expected: no deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>

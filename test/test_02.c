@@ -1,9 +1,7 @@
 /*
- * TEST 2: Two Threads, One Lock
- * Category: PURELY NON-DEADLOCK
  * Description: Multiple threads contending for a single lock. Sequential access
  * prevents deadlock (only one lock, so no circular wait possible).
- * Expected: Completes successfully
+ * Expected: no deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -15,7 +13,6 @@ void* worker(void* arg) {
     long tid = (long)arg;
     for (int i = 0; i < 50; i++) {
         pthread_mutex_lock(&lock);
-        printf("[T%ld] Critical section %d\n", tid, i);
         usleep(1000);
         pthread_mutex_unlock(&lock);
     }

@@ -1,9 +1,7 @@
 /*
- * TEST 15: Barrier with Partial Deadlock
- * Category: MIXED/PARTIAL DEADLOCK
  * Description: Multiple threads hit a barrier. Some proceed normally,
  * while a subset engage in deadlock-forming behavior after the barrier.
- * Expected: Deadlock for the subset, others may timeout
+ * Expected: deadlock detected
  */
 #define _XOPEN_SOURCE 600
 #include <pthread.h>
@@ -18,31 +16,23 @@ static int completed[4] = {0, 0, 0, 0};
 
 void* normal_worker(void* arg) {
     long tid = (long)arg;
-    printf("[T%ld] Waiting at barrier\n", tid);
     pthread_barrier_wait(&barrier);
-    printf("[T%ld] Passed barrier, running normally\n", tid);
 
     for (int i = 0; i < 20; i++) {
         pthread_mutex_lock(&X);
         completed[tid] = i;
         pthread_mutex_unlock(&X);
     }
-    printf("[T%ld] Completed successfully\n", tid);
     return NULL;
 }
 
 void* deadlock_worker1(void* arg) {
     long tid = (long)arg;
-    printf("[T%ld] Waiting at barrier\n", tid);
     pthread_barrier_wait(&barrier);
-    printf("[T%ld] Passed barrier, entering deadlock path\n", tid);
 
     pthread_mutex_lock(&X);
-    printf("[T%ld] Locked X\n", tid);
     usleep(100000);
-    printf("[T%ld] Trying to lock Y\n", tid);
     pthread_mutex_lock(&Y);
-    printf("[T%ld] Locked Y (should not reach)\n", tid);
     pthread_mutex_unlock(&Y);
     pthread_mutex_unlock(&X);
     return NULL;
@@ -50,16 +40,11 @@ void* deadlock_worker1(void* arg) {
 
 void* deadlock_worker2(void* arg) {
     long tid = (long)arg;
-    printf("[T%ld] Waiting at barrier\n", tid);
     pthread_barrier_wait(&barrier);
-    printf("[T%ld] Passed barrier, entering deadlock path\n", tid);
 
     pthread_mutex_lock(&Y);
-    printf("[T%ld] Locked Y\n", tid);
     usleep(100000);
-    printf("[T%ld] Trying to lock X\n", tid);
     pthread_mutex_lock(&X);
-    printf("[T%ld] Locked X (should not reach)\n", tid);
     pthread_mutex_unlock(&X);
     pthread_mutex_unlock(&Y);
     return NULL;

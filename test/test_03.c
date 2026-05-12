@@ -1,9 +1,7 @@
 /*
- * TEST 3: Ordered Locking - 2 Threads, 2 Locks
- * Category: PURELY NON-DEADLOCK
  * Description: Both threads lock in the same order (A before B).
  * This prevents circular wait, thus no deadlock.
- * Expected: Completes successfully
+ * Expected: no deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -18,7 +16,6 @@ void* worker(void* arg) {
         pthread_mutex_lock(&A);
         usleep(5000);
         pthread_mutex_lock(&B);
-        printf("[T%ld] Locked both A and B (iteration %d)\n", tid, i);
         usleep(5000);
         pthread_mutex_unlock(&B);
         pthread_mutex_unlock(&A);

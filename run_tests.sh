@@ -9,16 +9,12 @@ TEST_DIR="$REPO/test"
 TIMEOUT=5   # seconds; real deadlocks hang; lockdep may detect early (exit 66)
 
 # ---------------------------------------------------------------------------
-# Ground truth: 1 = deadlock expected, 0 = no deadlock expected
-# Categories:
-#   01-06  PURELY NON-DEADLOCK
-#   07-10  DEADLOCK
-#   11-13  DUBIOUS NON-DEADLOCK (unsafe ordering, but may not actually hang)
-#   14-16  MIXED/PARTIAL DEADLOCK (subset of threads deadlock)
-#   17-22  NON-DEADLOCK extended
-#   23-26  DEADLOCK extended
-#   27-28  DUBIOUS extended
-#   29-30  MIXED extended
+# Ground truth: 1 = deadlock expected, 0 = no deadlock expected.
+# Categories match the "Expected:" line in each test_*.c header:
+#   NON-DEADLOCK         expected outcome: no deadlock detected
+#   DEADLOCK             expected outcome: deadlock detected (actual circular wait)
+#   POTENTIAL-DEADLOCK   expected outcome: potential deadlock detected (graph cycle,
+#                                          may not hang depending on scheduling)
 # ---------------------------------------------------------------------------
 declare -A GROUND_TRUTH=(
   [test_01]=0  [test_02]=0  [test_03]=0  [test_04]=0  [test_05]=0  [test_06]=0
@@ -31,20 +27,19 @@ declare -A GROUND_TRUTH=(
   [test_29]=1  [test_30]=1
 )
 
-# Explicit category map (avoids fragile numeric-range logic)
 declare -A CATEGORY=(
-  [test_01]="NON-DEADLOCK"  [test_02]="NON-DEADLOCK"  [test_03]="NON-DEADLOCK"
-  [test_04]="NON-DEADLOCK"  [test_05]="NON-DEADLOCK"  [test_06]="NON-DEADLOCK"
-  [test_07]="DEADLOCK"      [test_08]="DEADLOCK"      [test_09]="DEADLOCK"
+  [test_01]="NON-DEADLOCK"        [test_02]="NON-DEADLOCK"        [test_03]="NON-DEADLOCK"
+  [test_04]="NON-DEADLOCK"        [test_05]="NON-DEADLOCK"        [test_06]="NON-DEADLOCK"
+  [test_07]="DEADLOCK"            [test_08]="DEADLOCK"            [test_09]="DEADLOCK"
   [test_10]="DEADLOCK"
-  [test_11]="DUBIOUS"       [test_12]="DUBIOUS"       [test_13]="DUBIOUS"
-  [test_14]="MIXED"         [test_15]="MIXED"         [test_16]="MIXED"
-  [test_17]="NON-DEADLOCK"  [test_18]="NON-DEADLOCK"  [test_19]="NON-DEADLOCK"
-  [test_20]="NON-DEADLOCK"  [test_21]="NON-DEADLOCK"  [test_22]="NON-DEADLOCK"
-  [test_23]="DEADLOCK"      [test_24]="DEADLOCK"      [test_25]="DEADLOCK"
+  [test_11]="POTENTIAL-DEADLOCK"  [test_12]="NON-DEADLOCK"        [test_13]="POTENTIAL-DEADLOCK"
+  [test_14]="DEADLOCK"            [test_15]="DEADLOCK"            [test_16]="DEADLOCK"
+  [test_17]="NON-DEADLOCK"        [test_18]="NON-DEADLOCK"        [test_19]="NON-DEADLOCK"
+  [test_20]="NON-DEADLOCK"        [test_21]="NON-DEADLOCK"        [test_22]="NON-DEADLOCK"
+  [test_23]="DEADLOCK"            [test_24]="DEADLOCK"            [test_25]="DEADLOCK"
   [test_26]="DEADLOCK"
-  [test_27]="DUBIOUS"       [test_28]="DUBIOUS"
-  [test_29]="MIXED"         [test_30]="MIXED"
+  [test_27]="POTENTIAL-DEADLOCK"  [test_28]="POTENTIAL-DEADLOCK"
+  [test_29]="DEADLOCK"            [test_30]="DEADLOCK"
 )
 
 TESTS=(test_01 test_02 test_03 test_04 test_05 test_06

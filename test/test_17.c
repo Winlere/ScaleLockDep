@@ -1,11 +1,9 @@
 /*
- * TEST 17: Lock Convoy (High-Contention Single Lock)
- * Category: NON-DEADLOCK
  * Description: 10 threads compete for a single mutex, each acquiring it 200
  * times. A single lock cannot create a circular wait (no "hold-and-wait"
  * between multiple resources), so deadlock is impossible by Coffman's
  * conditions. Tests detector accuracy under high lock-contention load.
- * Expected: Completes successfully
+ * Expected: no deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>

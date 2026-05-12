@@ -1,10 +1,8 @@
 /*
- * TEST 12: Dubious Try-Lock with Fallback
- * Category: DUBIOUS NON-DEADLOCK
  * Description: Uses pthread_mutex_trylock to avoid blocking.
  * If try fails, it releases and retries. Avoids standard deadlock
  * but can lead to livelock or starvation under high contention.
- * Expected: Completes (or spins forever in livelock)
+ * Expected: no deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -27,13 +25,11 @@ void* worker(void* arg) {
                 // Got A, try to get B
                 if (pthread_mutex_trylock(&B) == 0) {
                     // Got both!
-                    printf("[T%ld] Acquired both locks\n", tid);
                     acquired_both = 1;
                     pthread_mutex_unlock(&B);
                     pthread_mutex_unlock(&A);
                 } else {
                     // Failed to get B, release A and retry
-                    printf("[T%ld] Got A but not B, retrying\n", tid);
                     pthread_mutex_unlock(&A);
                     retries++;
                     usleep(1000);
@@ -46,7 +42,6 @@ void* worker(void* arg) {
         }
 
         if (!acquired_both) {
-            printf("[T%ld] Failed to acquire both locks after retries\n", tid);
         }
     }
 

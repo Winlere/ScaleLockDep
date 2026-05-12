@@ -1,12 +1,10 @@
 /*
- * TEST 29: Triple-Pair Mixed Scenario
- * Category: MIXED/PARTIAL DEADLOCK
  * Description: 6 threads operate in 3 independent pairs. Pair 1 (T1, T2)
  * deadlocks on {A, B} (A↔B inversion); pair 2 (T3, T4) deadlocks on {C, D}
  * (C↔D inversion); pair 3 (T5, T6) safely acquires E then F in consistent
  * order and completes freely. Two simultaneous deadlocks coexist with active
  * safe threads.
- * Expected: DEADLOCK detected; T5 and T6 would complete
+ * Expected: deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -42,7 +40,6 @@ void* t5(void* arg) { (void)arg;
         pthread_mutex_unlock(&F);
         pthread_mutex_unlock(&E);
     }
-    printf("[T5] Completed safely\n");
     return NULL; }
 
 void* t6(void* arg) { (void)arg;
@@ -52,7 +49,6 @@ void* t6(void* arg) { (void)arg;
         pthread_mutex_unlock(&F);
         pthread_mutex_unlock(&E);
     }
-    printf("[T6] Completed safely\n");
     return NULL; }
 
 int main(void) {

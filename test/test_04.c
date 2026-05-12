@@ -1,9 +1,7 @@
 /*
- * TEST 4: Ordered Locking - Multiple Threads, 3 Locks
- * Category: PURELY NON-DEADLOCK
  * Description: Like the benchmark correct_40threads_3locks, all threads
  * lock in order A->B->C, preventing deadlock.
- * Expected: Completes successfully
+ * Expected: no deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -25,7 +23,6 @@ void* worker(void* arg) {
         pthread_mutex_lock(&C);
 
         if (i % 30 == 0) {
-            printf("[T%ld] progress %d\n", tid, i);
         }
 
         pthread_mutex_unlock(&C);

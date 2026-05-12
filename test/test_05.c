@@ -1,9 +1,7 @@
 /*
- * TEST 5: Disjoint Locks
- * Category: PURELY NON-DEADLOCK
  * Description: Two threads with completely disjoint lock sets. Thread 1 uses locks A and B,
  * Thread 2 uses locks C and D. No lock sharing, so no deadlock.
- * Expected: Completes successfully
+ * Expected: no deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -20,7 +18,6 @@ void* worker1(void* arg) {
         pthread_mutex_lock(&A);
         usleep(2000);
         pthread_mutex_lock(&B);
-        printf("[T1] Locked A and B\n");
         pthread_mutex_unlock(&B);
         pthread_mutex_unlock(&A);
     }
@@ -33,7 +30,6 @@ void* worker2(void* arg) {
         pthread_mutex_lock(&C);
         usleep(2000);
         pthread_mutex_lock(&D);
-        printf("[T2] Locked C and D\n");
         pthread_mutex_unlock(&D);
         pthread_mutex_unlock(&C);
     }

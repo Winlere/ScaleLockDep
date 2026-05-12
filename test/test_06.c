@@ -1,9 +1,7 @@
 /*
- * TEST 6: Lock-Free Work
- * Category: PURELY NON-DEADLOCK
  * Description: Threads mostly do work without locks. Lock only used for occasional
  * synchronization. Minimal contention and lock time.
- * Expected: Completes successfully
+ * Expected: no deadlock detected
  */
 #include <pthread.h>
 #include <stdio.h>
@@ -25,7 +23,6 @@ void* worker(void* arg) {
         pthread_mutex_lock(&sync_lock);
         counter++;
         if (counter % 10 == 0) {
-            printf("[T%ld] Counter = %d\n", tid, counter);
         }
         pthread_mutex_unlock(&sync_lock);
     }
