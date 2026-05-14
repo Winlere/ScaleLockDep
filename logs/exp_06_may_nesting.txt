@@ -1,0 +1,152 @@
+Experiment: Nesting Depth Scaling (3-deep vs 40-deep)
+Date: 2026-05-06
+Commit ID: 87d6252
+
+--- Settings ---
+
+Machine
+  OS       : Linux archdell 7.0.3-arch1-1 x86_64
+  CPU      : 11th Gen Intel Core i7-11700 @ 2.50 GHz (8 cores / 16 threads)
+  Memory   : 16 GiB RAM
+
+Software
+  Compiler : gcc (flags: -Wall -Wextra -pthread; lockdep: -O3 -g -flto
+             -fno-semantic-interposition)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : 87d6252dc1a1db159442be81b9bd91b41f603392
+
+--- Parameters ---
+
+Benchmark binaries
+  shallow : benchmarks/correct_40threads_3locks_10000iter.out
+  deep    : benchmarks/correct_40threads_40locks_10000iter.out
+
+Both binaries are parameter-free. Each iteration acquires N locks in a
+fixed global order, then releases in reverse. No actual deadlock; this
+exercises potential-deadlock graph maintenance under deep held-stack
+pressure.
+
+Workload
+  threads        = 40
+  iters/thread   = 10,000
+  shallow N      = 3   ->  pairs = 40 x 10000 x 3  = 1,200,000
+  deep    N      = 40  ->  pairs = 40 x 10000 x 40 = 16,000,000
+
+Conditions
+  baseline      : no LD_PRELOAD
+  lockdep/glob  : LOCKDEP_MODE=global LD_PRELOAD=./lockdep/liblockdep.so
+  ScaleLockDep  : LOCKDEP_MODE=rb     LD_PRELOAD=./lockdep/liblockdep.so
+
+Measurement
+  wall_ns captured externally with `date +%s%N` straddling the run.
+  Stdout redirected to /dev/null (per-iter progress printf is much
+  noisier than the work being measured).
+  5 runs per cell; mean reported.
+
+lockdep limits (lockdep.h)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64   (deep variant uses 40 of 64)
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+Shallow (3-deep nest, 3 shared locks, 1,200,000 pairs/run)
+condition  run  wall_ns
+baseline   1     93200547
+baseline   2     93205220
+baseline   3     95408949
+baseline   4     91870884
+baseline   5     96241264
+global     1    204701527
+global     2    204999545
+global     3    205615473
+global     4    203712323
+global     5    205626540
+rb         1    217159538
+rb         2    215255609
+rb         3    215545743
+rb         4    214955375
+rb         5    214974078
+
+Deep (40-deep nest, 40 shared locks, 16,000,000 pairs/run)
+condition  run  wall_ns
+baseline   1    386089686
+baseline   2    371895494
+baseline   3    371259771
+baseline   4    372148932
+baseline   5    371666363
+global     1   1046930647
+global     2   1053396810
+global     3   1069960888
+global     4   1076076995
+global     5   1083131693
+rb         1    880974581
+rb         2    874565866
+rb         3    875055618
+rb         4    883061706
+rb         5    874760484
+
+Means
+  shallow baseline =     93,985,373 ns   ( 93.99 ms)
+  shallow global   =    204,931,082 ns   (204.93 ms)
+  shallow rb       =    215,578,069 ns   (215.58 ms)
+  deep    baseline =    374,612,049 ns   (374.61 ms)
+  deep    global   =  1,065,899,407 ns   (1065.90 ms)
+  deep    rb       =    877,683,651 ns   ( 877.68 ms)
+
+--- Key Findings ---
+
+Throughput (pairs / mean wall) and overhead (lockdep / baseline)
+
+variant   condition  ns_per_pair  ops_per_sec   overhead
+shallow   baseline    78.32        12,768,830    1.00x
+shallow   global     170.78         5,855,627    2.18x
+shallow   rb         179.65         5,566,500    2.29x
+deep      baseline    23.41        42,710,841    1.00x
+deep      global      66.62        15,010,830    2.85x
+deep      rb          54.86        18,229,210    2.34x
+
+Marginal cost (lockdep_ns_per_pair - baseline_ns_per_pair)
+  shallow global  =  92.5 ns/pair
+  shallow rb      = 101.3 ns/pair
+  deep    global  =  43.2 ns/pair
+  deep    rb      =  31.5 ns/pair
+
+--- Comparison with exp_05_may_nesting.txt ---
+
+The May 5 run on commit 3f06985 reported:
+  shallow base  =  94,179,174 ns;  global = 202,789,085;  rb = 212,922,648
+  deep    base  = 371,357,393 ns;  global = 1,034,597,713; rb = 861,771,049
+
+Today's numbers are within +/-2% of the May 5 run on every cell (87d6252
+adds the pedges experiment but does not touch the hot path). No regression.
+
+--- What the Experiment Reveals ---
+
+1. The deep variant is the scenario lockdep is built for: 40 nested
+   acquires per iteration, 40 threads, no actual deadlock. Each
+   nested acquire under global mode walks the held-stack to add up to
+   N edges, then runs DFS for cycle detection — work that is O(N) per
+   acquire and O(N^2) per iteration. global pays 43 ns per pair on top
+   of the 23 ns/pair baseline; that's 1.85x marginal, 2.85x total.
+
+2. rb pushes that O(depth) work onto a single worker thread. On the
+   deep workload, rb finishes 18% faster than global in wall time
+   (878 ms vs 1066 ms) — the worker absorbs the graph work while the
+   40 application threads only pay the enqueue cost. Marginal cost
+   drops from 43 ns/pair (global) to 31 ns/pair (rb).
+
+3. On the shallow workload, rb is ~5% slower than global. With only
+   3 held locks, the O(depth) work is tiny — the predecessor-summary
+   short-circuit makes the global mode's DFS essentially free after
+   the first few iterations. rb still has to pay the per-acquire
+   enqueue cost. The crossover where rb starts winning is somewhere
+   around held-stack depth 8-16 on this CPU, which matches what the
+   pedges experiment shows directly.
+
+4. The deep baseline (23 ns/pair) is faster than the shallow baseline
+   (78 ns/pair) because the deep run does 13x more pthread_mutex_lock
+   calls in roughly 4x the wall time — there is more parallelism
+   available across 40 distinct mutexes than across 3 shared mutexes,
+   so cache-line contention is lower per acquire. Compare overhead
+   *ratios*, not absolute baselines, between shallow and deep.

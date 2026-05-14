@@ -1,0 +1,33 @@
+=== nesting: shallow (3 locks, 40 threads, 10000 iters) ===
+baseline 1 93200547
+baseline 2 93205220
+baseline 3 95408949
+baseline 4 91870884
+baseline 5 96241264
+global 1 204701527
+global 2 204999545
+global 3 205615473
+global 4 203712323
+global 5 205626540
+rb 1 217159538
+rb 2 215255609
+rb 3 215545743
+rb 4 214955375
+rb 5 214974078
+
+=== nesting: deep (40 locks, 40 threads, 10000 iters) ===
+baseline 1 386089686
+baseline 2 371895494
+baseline 3 371259771
+baseline 4 372148932
+baseline 5 371666363
+global 1 1046930647
+global 2 1053396810
+global 3 1069960888
+global 4 1076076995
+global 5 1083131693
+rb 1 880974581
+rb 2 874565866
+rb 3 875055618
+rb 4 883061706
+rb 5 874760484

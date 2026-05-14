@@ -38,10 +38,18 @@ Runtime environment variables:
 
 - `LOCKDEP_DEBUG=1`: enable verbose debug logging. By default the library stays
   quiet except for deadlock reports.
+- `LOCKDEP_REPORT_SITES=1`: enable source-location tracking for report output.
+  This records lock acquisition call sites on the lock/unlock hot path, so it is
+  useful for debugging and demos but disabled by default for performance runs.
 - `LOCKDEP_MODE=global`: run synchronous graph updates in the lock path.
-- `LOCKDEP_MODE=rb`: enqueue nested lock events into per-thread ring buffers and
-  let a background worker rebuild held state, build the graph, and detect cycles
+- `LOCKDEP_MODE=rb`: enqueue nested lock-order edge batches into per-thread ring
+  buffers and let a background worker build the graph and detect cycles
   asynchronously.
+- `LOCKDEP_RB_FULL=stall`: in `rb` mode, preserve exact potential-deadlock
+  tracking by waiting when a per-thread ring is full. This is the default.
+- `LOCKDEP_RB_FULL=drop`: in `rb` mode, drop edge batches when a per-thread ring
+  is full. Actual-deadlock detection remains exact, but potential-deadlock
+  reporting becomes approximate.
 
 The actual-deadlock detector remains synchronous in both modes.
 
@@ -67,111 +75,189 @@ LOCKDEP_DEBUG=1 LD_PRELOAD=$PWD/liblockdep.so ./test
 LOCKDEP_MODE=rb LD_PRELOAD=$PWD/liblockdep.so ./test
 ```
 
-## Optimizations Compared With The Original `lockdep` Branch
+## Reports
 
-This branch keeps the original detection semantics, but restructures the
-metadata path to reduce lock-path overhead and to support a more scalable
-potential-deadlock backend.
+Deadlock reports include lock slots, mutex addresses, participating thread
+slots, and Linux thread IDs. With `LOCKDEP_REPORT_SITES=1`, reports also include
+best-effort source locations for lock operations.
 
-### 1. Backend Split For Potential Deadlocks
+For actual deadlocks, the report prints the live wait chain and annotates each
+edge with:
 
-The original branch used one centralized potential-deadlock path: successful
-acquires updated the global graph synchronously under shared metadata
-coordination.
+- the thread waiting for a mutex
+- the source location of the blocking lock attempt
+- the thread that owns the mutex
+- the source location where the owner acquired that mutex
 
-This branch introduces explicit backend selection through `LOCKDEP_MODE`:
+For potential deadlocks, the report prints the new dependency edge, the existing
+dependency path that closes the cycle, and the thread/source location where each
+historical lock-order edge was observed.
 
-- `global`: preserves the original synchronous graph-update model.
-- `rb`: moves potential-deadlock graph construction off the application lock
-  path by logging nested lock events into per-thread ring buffers and consuming
-  them in a background worker.
+Source locations are resolved with `addr2line` on the reporting path after site
+tracking is enabled. They are most useful when the target program is built with
+debug symbols such as `-g`. If source information is unavailable, the report
+falls back to symbols and raw addresses.
 
-This keeps actual deadlock detection unchanged while making the potential path
-swappable.
+## Optimizations Compared With The Original Non-`rb` Backend
 
-### 2. Asynchronous Ring-Buffer Backend
+The original non-`rb` design performs potential-deadlock graph updates
+synchronously in the application thread. Every nested acquire can become a
+global metadata operation: walk the currently held locks, add dependency edges,
+update reachability, and report a cycle if the new edge closes one.
 
-The `rb` backend adds the scalable metadata organization proposed for the final
-stage:
+This version keeps the same high-level semantics, but separates the two
+detection problems by urgency:
 
-- each application thread writes to its own single-producer ring buffer
-- a dedicated internal worker thread consumes those events
-- the worker reconstructs per-thread held-lock state
-- the worker owns its own dependency graph and cycle-detection state
+- actual deadlock detection remains synchronous because it must run before a
+  thread blocks on a busy mutex
+- potential deadlock detection can run asynchronously because it reports
+  historical lock-order cycles, not an immediately blocking wait cycle
 
-Compared with the original branch, potential-deadlock processing no longer has
-to be completed synchronously by the thread that just acquired a nested lock.
+That split is the main scalability idea in the final design. The lock path still
+does the safety-critical wait-for check, while the more expensive historical
+graph maintenance can be moved out of the application thread.
 
-### 3. Synchronous Actual Deadlock Detection Preserved
+### Backend Selection
 
-The original branch relied on a `trylock`-first path so that actual deadlock
-could be checked before a thread blocks on a busy mutex.
+`LOCKDEP_MODE` selects the potential-deadlock backend:
 
-That invariant is preserved here:
+- `global`: the original-style synchronous dependency graph backend
+- `rb`: the optimized ring-buffer backend
 
-- the actual detector still runs before blocking
-- the current wait chain is still checked synchronously
-- actual deadlock reporting and exit behavior remain independent of
-  `LOCKDEP_MODE`
+Both modes share the same actual-deadlock detector. In other words, changing
+`LOCKDEP_MODE` changes how historical lock-order cycles are detected, but it
+does not weaken live deadlock detection.
 
-Only the potential-deadlock backend changes between modes.
+### Per-Thread Ring Buffers
 
-### 4. Reduced Front-End Work For Repeated Dependencies
+The optimized `rb` backend gives each application thread its own producer ring.
+This avoids putting all nested lock-order events through one shared application
+thread-side graph lock. Application threads append compact records locally, and
+a background worker later consumes those records.
 
-The original branch always walked the held-lock set and updated the graph on
-each nested acquire, even when all corresponding dependency edges had already
-been seen before.
+Compared with the original synchronous backend, this changes the critical path
+from "update the global potential graph now" to "publish a small event to the
+current thread's ring." That is the same broad scalability pattern used by many
+parallel systems: keep the hot path local and move aggregation to a background
+or less frequent path.
 
-This branch adds predecessor summaries for both backends:
+### Compact Edge-Batch Logging
 
-- in `global` mode, known predecessors let the lock path skip redundant graph
-  work
-- in `rb` mode, front-end threads can avoid entering tracking or queueing when
-  the dependency is already known
+Potential deadlock detection only needs lock-order dependencies. It does not
+need a complete replay of every acquire and release. The `rb` backend therefore
+logs edge batches instead of lock lifecycle events.
 
-This reduces repeated metadata work in stable lock-order workloads.
+On a nested acquire, the application thread already knows which locks it holds.
+It builds an event containing:
 
-### 5. Smaller Hot-Path Metadata Cost
+- the newly acquired lock slot
+- a bitset of currently held predecessor lock slots that represent candidate
+  `held_lock -> new_lock` edges
 
-Several library-internal overheads from the original branch were reduced:
+Unlocks do not enqueue potential-deadlock events, because a release does not
+create a new historical lock-order dependency. This removes worker-side held
+state reconstruction and keeps the async log focused on graph information.
+
+### Front-End Summaries And Skip Paths
+
+Stable workloads usually repeat the same lock orders many times. Reprocessing
+known dependency edges is wasted work, so this implementation keeps predecessor
+summaries that let the front end identify already-known edges.
+
+In `global` mode, those summaries let the application thread skip redundant
+synchronous graph updates. In `rb` mode, the front end uses atomic predecessor
+snapshots plus a per-thread held-lock bitset to decide whether a nested acquire
+contains any new graph information. If every `held_lock -> new_lock` edge is
+already known, the thread updates only its local held-lock state and avoids
+queueing an event.
+
+This makes repeated ordered locking converge toward a cheap fast path.
+
+### Worker-Owned Graph And Batch Deduplication
+
+The `rb` worker owns a separate dependency graph, predecessor summaries, and
+reachability matrix for potential-deadlock detection. Application threads do
+not mutate this graph directly.
+
+The worker also deduplicates work before touching the graph. It drains pending
+ring events into worker-local bitsets, coalesces duplicate predecessors for each
+target lock, filters known predecessors once per batch, and then updates the
+graph only for genuinely new edges.
+This reduces graph-update pressure when many events describe the same
+lock-order information.
+
+### Ring-Buffer Backpressure Policy
+
+The original synchronous backend cannot overflow an async queue because it never
+defers potential graph updates. Once the `rb` backend introduces bounded
+per-thread rings, it needs an explicit overflow policy.
+
+The default policy is exact:
+
+```bash
+LOCKDEP_RB_FULL=stall
+```
+
+When a ring is full, the producer waits until the worker drains space. This
+preserves exact potential-deadlock reporting.
+
+For profiling-style runs, the backend also supports:
+
+```bash
+LOCKDEP_RB_FULL=drop
+```
+
+This drops potential-deadlock edge batches under ring pressure. Actual-deadlock
+detection remains synchronous and exact, but potential-deadlock reporting
+becomes approximate while the queue is saturated.
+
+Normal runs keep `stall` as the default so the detector remains exact unless
+the user explicitly requests approximate profiling behavior.
+
+### Hot-Path Metadata Reductions
+
+The final implementation also reduces fixed per-lock overheads that existed in
+the original non-`rb` path:
 
 - thread-slot lookups use thread-local caching
 - mutex-address to lock-slot resolution uses a thread-local cache
-- debug logging is compiled into cheap guarded helpers and stays off by default
-- owner and waiting state use atomic hot-path updates instead of routing common
-  operations through the global metadata lock
+- owner and waiting metadata use atomic hot-path updates where possible
+- debug logging is guarded and disabled by default
+- top-level acquire and release have dedicated fast paths
+- normal LIFO nested unlocks avoid the general held-stack removal path
 
-These changes target the fixed cost paid on every successful lock/unlock pair.
+These optimizations matter even when potential-deadlock detection has no new
+graph edge to report, because they reduce the constant cost paid by every
+interposed `pthread_mutex_lock` and `pthread_mutex_unlock`.
 
-### 6. Fast Paths For Common Locking Shapes
+### Worker Runtime Behavior
 
-The original branch treated most acquires and releases through one general path.
-This branch adds fast paths for common cases:
+The `rb` worker is started lazily and sleeps on a semaphore when there is no
+pending work. This avoids idle polling and avoids creating the worker at all for
+runs that never need the ring-buffer backend.
 
-- top-level acquire fast path when the thread currently holds no locks
-- top-level release fast path for the common `count == 1` case
-- LIFO held-stack removal fast path for normal nested unlock order
+The worker drains all thread rings, processes events in batches, and publishes
+predecessor summaries back to the front-end skip path. The design still has one
+central worker and one worker-owned graph, but the amount of work sent to that
+central point is reduced by edge-batch logging, front-end summaries, and
+worker-side deduplication.
 
-These paths are especially relevant to shallow nesting and high-frequency mutex
-microbenchmarks.
+### Build Configuration
 
-### 7. Worker Runtime Improvements In `rb` Mode
+The shared library build uses optimization-oriented compiler settings for the
+interposition hot path. These settings help the compiler inline and simplify
+small helper functions that are crossed on every mutex operation.
 
-The ring-buffer backend also includes runtime improvements over a naive async
-implementation:
+### Prototype Scope
 
-- lazy worker startup, so the background thread is not created unless `rb` work
-  is actually needed
-- semaphore-based worker wakeup instead of idle polling
-- worker-owned graph state, so `rb` mode does not reuse the synchronous global
-  graph update path
+This is still a course-project prototype rather than a production replacement
+for kernel lockdep:
 
-This makes `rb` mode a distinct backend rather than a deferred wrapper around
-the original one.
+- the graph is fixed-size and bitset/matrix based
+- mutex addresses are treated as lock nodes
+- the `rb` backend uses one worker-owned graph
 
-### 8. Build Configuration For Shared-Library Optimization
-
-The library build now uses stronger optimization settings for the interposition
-hot path, including LTO-oriented shared-library optimization flags. The goal is
-to help the compiler inline and simplify small helper paths that are otherwise
-expensive when crossed on every lock/unlock operation.
+Those choices keep the implementation compact and make the comparison against
+the original synchronous backend clean. A production design would likely add
+dynamic lock classes, call-site or allocation-site grouping, larger sparse graph
+structures, and richer reports with stack traces.

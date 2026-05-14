@@ -1,0 +1,140 @@
+Experiment: Per-Operation Latency — Lock Acquire and Release Delay
+Date: 2026-05-06
+Commit ID: 87d6252
+
+--- Settings ---
+
+Machine
+  OS       : Linux archdell 7.0.3-arch1-1 x86_64
+  CPU      : 11th Gen Intel Core i7-11700 @ 2.50 GHz (8 cores / 16 threads)
+  Memory   : 16 GiB RAM
+
+Software
+  Compiler : gcc (flags: -Wall -Wextra -pthread; lockdep: -O3 -g -flto
+             -fno-semantic-interposition)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : 87d6252dc1a1db159442be81b9bd91b41f603392
+
+--- Parameters ---
+
+Benchmark binary : benchmarks/bench_latency.out
+Invocation       : bench_latency.out <num_threads> <iters_per_thread>
+Thread counts    : 1, 2, 4, 8, 16, 32, 64
+Iterations       : 100,000 per thread
+Locks            : 1 shared lock
+Metric           : average nanoseconds per operation (lock, unlock, pair)
+
+Scenario
+  1 shared lock, varying thread counts. Each iteration: time lock, time
+  unlock, accumulate separately. Reports per-thread averages aggregated
+  across all threads.
+
+  Note: clock_gettime(CLOCK_MONOTONIC) adds ~15-25 ns of measurement
+  overhead per call. This overhead is consistent across baseline and
+  lockdep, so the *difference* between conditions is accurate. Absolute
+  values include this measurement cost.
+
+Conditions
+  baseline      : no LD_PRELOAD
+  lockdep/glob  : LOCKDEP_MODE=global LD_PRELOAD=./lockdep/liblockdep.so
+  ScaleLockDep  : LOCKDEP_MODE=rb     LD_PRELOAD=./lockdep/liblockdep.so
+
+lockdep limits (lockdep.h)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+Baseline (no lockdep)
+threads  iters   avg_lock_ns  avg_unlock_ns  avg_pair_ns
+1        100000  18.8         18.2           37.0
+2        100000  120.3        109.0          229.3
+4        100000  304.7        187.2          492.0
+8        100000  681.0        464.5          1145.5
+16       100000  1282.2       1097.6         2379.8
+32       100000  3158.0       1770.4         4928.4
+64       100000  8084.3       1628.6         9712.9
+
+lockdep global
+threads  iters   avg_lock_ns  avg_unlock_ns  avg_pair_ns
+1        100000  25.9         30.2           56.1
+2        100000  131.9        151.4          283.3
+4        100000  344.0        251.5          595.5
+8        100000  862.1        588.4          1450.6
+16       100000  1818.1       1398.2         3216.3
+32       100000  4237.3       2257.4         6494.7
+64       100000  10744.8      2126.1         12870.9
+
+lockdep rb (ScaleLockDep)
+threads  iters   avg_lock_ns  avg_unlock_ns  avg_pair_ns
+1        100000  25.9         31.9           57.8
+2        100000  124.6        148.9          273.5
+4        100000  352.9        258.3          611.2
+8        100000  898.3        602.6          1501.0
+16       100000  1798.3       1439.9         3238.2
+32       100000  4306.9       2294.8         6601.7
+64       100000  11036.7      2170.5         13207.1
+
+--- Key Findings ---
+
+Per-pair lockdep tax (lockdep_pair_ns - baseline_pair_ns)
+
+threads  base_pair  global_pair  rb_pair  global_tax  rb_tax
+1        37.0       56.1         57.8     +19.1 ns    +20.8 ns
+2        229.3      283.3        273.5    +54.0 ns    +44.2 ns
+4        492.0      595.5        611.2    +103.5 ns   +119.2 ns
+8        1145.5     1450.6       1501.0   +305.1 ns   +355.5 ns
+16       2379.8     3216.3       3238.2   +836.5 ns   +858.4 ns
+32       4928.4     6494.7       6601.7   +1566.3 ns  +1673.3 ns
+64       9712.9     12870.9      13207.1  +3158.0 ns  +3494.2 ns
+
+The 1-thread tax (~20 ns) is the pure interception cost: dlsym
+indirection + recursive guard + held-stack push/pop + TLS lookup. As
+threads grow, the absolute tax grows roughly linearly because every
+contended acquire serializes on g_meta_lock (global) or contends for
+the per-thread ring-buffer write index (rb).
+
+--- Lock vs unlock split ---
+
+At 1 thread the lock and unlock paths cost the same in lockdep
+(~26 ns lock, ~30 ns unlock); at 64 threads, lock dominates massively
+(~10-11 us lock vs ~2 us unlock) because acquire is the path that
+runs before-blocking wait-chain detection while unlock just pops the
+held-stack and decrements counters.
+
+--- Comparison with exp_20_apr_latency.txt ---
+
+April run (f760bcd, global only): 1T pair = 51.7 ns, 64T pair =
+~13.5 us in global. Today's global = 56.1 ns / 12.9 us — the small
+1-thread bump (+4 ns) is within run-to-run noise on clock_gettime.
+No regression on the multi-thread end. rb is new; it tracks global
+within 5% throughout.
+
+--- What the Experiment Reveals ---
+
+1. The 1-thread floor is ~20 ns of pure metadata cost per lock/unlock
+   pair. This is the irreducible price of having lockdep present at
+   all on the hot path.
+
+2. Per-pair tax grows super-linearly with thread count under high
+   contention because both backends serialize *some* state: global
+   serializes on g_meta_lock, rb serializes on the worker's drain
+   bandwidth (and on the per-thread ring write index, though that is
+   single-producer). At 64 threads on 16 hardware threads the chip is
+   already 4x oversubscribed on baseline — adding lockdep simply
+   stretches the cmpxchg chain.
+
+3. global and rb are within ~5% of each other for every cell because
+   nesting depth is 1 (single shared lock). rb has no work to offload;
+   it pays the enqueue cost to gain nothing. This experiment is the
+   pessimal case for rb. Compare against the deep-nesting experiments
+   for the case where rb earns its keep.
+
+4. The asymmetry between lock and unlock latency at high thread counts
+   is intrinsic to mutex contention, not a lockdep artifact: the
+   blocking-acquire path is where threads queue, while unlock is a
+   short atomic store and a wakeup hint. lockdep's wait-chain check
+   in lockdep_before_blocking_mutex_lock tracks this asymmetry — it
+   only runs when the trylock fails, which is exactly when there is
+   already a queue.

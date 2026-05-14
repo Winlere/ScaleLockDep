@@ -11,6 +11,7 @@ ANYLOCK_BIN      = benchmarks/bench_overhead_anylock.out
 ANYLOCK4_BIN     = benchmarks/bench_overhead_anylock4.out
 CSLEN_BIN        = benchmarks/bench_overhead_cslen.out
 LATENCY_BIN      = benchmarks/bench_latency.out
+PEDGES_BIN       = benchmarks/bench_potential_edges.out
 
 # Thread counts to sweep
 THREAD_COUNTS = 1 2 4 8 16 32 64
@@ -24,7 +25,7 @@ CS_LENGTHS = 0 10 20 30 50 75 100 150 200 300 500 750 1000 10000 100000
 # Threads for cslen experiment
 CSLEN_THREADS = 8
 
-.PHONY: all build run overhead overhead-anylock overhead-anylock4 overhead-cslen latency clean
+.PHONY: all build run overhead overhead-anylock overhead-anylock4 overhead-cslen latency potential-edges clean
 
 all: build
 
@@ -33,7 +34,7 @@ build: $(LOCKDEP_LIB) $(BENCHMARKS)
 $(LOCKDEP_LIB):
 	$(MAKE) -C lockdep
 
-$(BENCHMARKS) $(OVERHEAD_BIN) $(ANYLOCK_BIN) $(ANYLOCK4_BIN) $(CSLEN_BIN) $(LATENCY_BIN):
+$(BENCHMARKS) $(OVERHEAD_BIN) $(ANYLOCK_BIN) $(ANYLOCK4_BIN) $(CSLEN_BIN) $(LATENCY_BIN) $(PEDGES_BIN):
 	$(MAKE) -C benchmarks
 
 # Run all benchmarks under lockdep; deadlock ones exit 66, correct ones exit 0.
@@ -167,6 +168,47 @@ latency: build $(LATENCY_BIN)
 	@printf "threads\titers\tavg_lock_ns\tavg_unlock_ns\tavg_pair_ns\n"
 	@for t in $(THREAD_COUNTS); do \
 		LD_PRELOAD=./$(LOCKDEP_LIB) ./$(LATENCY_BIN) $$t $(ITERS); \
+	done
+
+# ---------------------------------------------------------------------------
+# Potential-graph construction experiment
+#
+# Each thread owns a private set of locks_per_thread mutexes (disjoint across
+# threads) and acquires them in fixed order, releases reverse. App-level mutex
+# contention is zero, so the lockdep delta is the cost of potential-deadlock
+# graph construction (held-stack + dependency-edge + cycle-check / enqueue).
+#
+# Sweeps the trade-off between thread count and per-thread nesting depth at
+# (mostly) fixed total lock budget. PEDGES_PAIRS is "threads:depth" tuples.
+# Constraints (lockdep.h defaults):
+#   threads * depth <= 256 (LOCKDEP_MAX_LOCK_SLOTS)
+#   depth           <= 64  (LOCKDEP_MAX_HELD_LOCK_SLOTS)
+#   threads         <= 128 (LOCKDEP_MAX_THREAD_SLOTS)
+# Columns: threads  locks_per_thread  iters  wall_ns  total_ops  ops_per_sec
+# ---------------------------------------------------------------------------
+PEDGES_PAIRS = 1:64 4:64 8:32 16:16 32:8 64:4
+
+potential-edges: build $(PEDGES_BIN)
+	@echo "=== Potential-graph construction (disjoint locks, threads:depth pairs) ==="
+	@echo "--- baseline (no lockdep) ---"
+	@printf "threads\tlocks_per_thread\titers\twall_ns\ttotal_ops\tops_per_sec\n"
+	@for p in $(PEDGES_PAIRS); do \
+		t=$${p%:*}; d=$${p#*:}; \
+		./$(PEDGES_BIN) $$t $$d $(ITERS); \
+	done
+	@echo ""
+	@echo "--- with lockdep (global) ---"
+	@printf "threads\tlocks_per_thread\titers\twall_ns\ttotal_ops\tops_per_sec\n"
+	@for p in $(PEDGES_PAIRS); do \
+		t=$${p%:*}; d=$${p#*:}; \
+		LOCKDEP_MODE=global LD_PRELOAD=./$(LOCKDEP_LIB) ./$(PEDGES_BIN) $$t $$d $(ITERS); \
+	done
+	@echo ""
+	@echo "--- with lockdep (rb) ---"
+	@printf "threads\tlocks_per_thread\titers\twall_ns\ttotal_ops\tops_per_sec\n"
+	@for p in $(PEDGES_PAIRS); do \
+		t=$${p%:*}; d=$${p#*:}; \
+		LOCKDEP_MODE=rb LD_PRELOAD=./$(LOCKDEP_LIB) ./$(PEDGES_BIN) $$t $$d $(ITERS); \
 	done
 
 clean:

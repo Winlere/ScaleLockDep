@@ -1,0 +1,94 @@
+Experiment: Potential Graph Construction Cost (Disjoint Locks)
+Date: 2026-05-06
+Commit ID: 9295d08
+
+--- Settings ---
+
+Machine
+  OS       : Linux 7.0.3-arch1-1 x86_64
+  CPU      : 11th Gen Intel(R) Core(TM) i7-11700 @ 2.50GHz (128 cores / 16 threads)
+  Memory   : 15 GiB RAM
+
+Software
+  Compiler : gcc (-Wall -Wextra -pthread; lockdep at March: -O2 -Wall
+             -Wextra -fPIC)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : 9295d0832021633fef4cf138afc7030ff1d72a4f (worktree: /tmp/nodeadlock-march)
+  Note     : The March lockdep had only the synchronous global-mode detector;
+             LOCKDEP_MODE was not yet introduced and the rb backend did not
+             exist. The bench_potential_edges.c benchmark was copied from
+             the scale branch into the March worktree and rebuilt against
+             the March liblockdep.so on 2026-05-06.
+
+--- Parameters ---
+
+Benchmark binary : benchmarks/bench_potential_edges.out (copied from scale)
+Invocation       : bench_potential_edges.out <num_threads> <locks_per_thread> [iters]
+
+Each thread owns a private set of <locks_per_thread> mutexes (disjoint
+across threads). Each iteration acquires its locks in fixed ascending
+order then releases in descending order. Application-level mutex
+contention is zero; the entire baseline-to-lockdep delta is potential-
+deadlock graph construction.
+
+Sweep design: trade per-thread depth against thread count, keeping
+total lock budget at or near LOCKDEP_MAX_LOCK_SLOTS (256).
+
+  threads  depth  total_locks  total_pairs (iters=100k)
+   1        64      64            6.4M
+   4        64     256           25.6M
+   8        32     256           25.6M
+  16        16     256           25.6M
+  32         8     256           25.6M
+  64         4     256           25.6M
+
+iters/thread = 100000.
+3 runs per cell.
+
+Conditions
+  baseline : no LD_PRELOAD
+  global   : LD_PRELOAD=/tmp/nodeadlock-march/lockdep/liblockdep.so   (only mode that existed
+                                    at commit 9295d08)
+
+Measurement
+  wall_ns from clock_gettime(CLOCK_MONOTONIC) inside the binary,
+  straddling pthread_create..pthread_join.
+
+lockdep limits (lockdep.h, March commit)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+Columns: threads  locks_per_thread  iters  wall_ns  total_ops  ops_per_sec
+
+Baseline (no LD_PRELOAD)
+threads	locks_per_thread	iters	wall_ns	total_ops	ops_per_sec
+1	64	100000	79172690	6400000	80835955
+1	64	100000	73133356	6400000	87511368
+1	64	100000	74416109	6400000	86002884
+4	64	100000	79727567	25600000	321093456
+4	64	100000	79858812	25600000	320565750
+4	64	100000	81138258	25600000	315510841
+8	32	100000	45953878	25600000	557080297
+8	32	100000	47019814	25600000	544451324
+8	32	100000	46092259	25600000	555407796
+16	16	100000	45786545	25600000	559116221
+16	16	100000	47529128	25600000	538617077
+16	16	100000	51430466	25600000	497759441
+32	8	100000	66651105	25600000	384089656
+32	8	100000	55803217	25600000	458754914
+32	8	100000	53954057	25600000	474477758
+64	4	100000	66987102	25600000	382163121
+64	4	100000	49374801	25600000	518483102
+64	4	100000	51415164	25600000	497907582
+
+lockdep - global mode (synchronous, March)
+threads	locks_per_thread	iters	wall_ns	total_ops	ops_per_sec
+1	64	100000	1923908835	6400000	3326561
+1	64	100000	1954602469	6400000	3274323
+1	64	100000	1916578912	6400000	3339283
+4	64	100000	67589730244	25600000	378756
+4	64	100000	51230405527	25600000	499703
+4	64	100000	62476350639	25600000	409755

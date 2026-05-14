@@ -72,7 +72,7 @@ static int lockdep_collect_actual_deadlock_chain(int self_thread_slot,
  * @param mutex The mutex that will block the current thread.
  * @return 1 if an actual deadlock is detected, 0 otherwise.
  */
-int lockdep_before_blocking_mutex_lock(pthread_mutex_t *mutex) {
+int lockdep_before_blocking_mutex_lock(pthread_mutex_t *mutex, uintptr_t waiting_pc) {
     int self_thread_slot = lockdep_current_thread_slot();
     int target_lock_slot = lockdep_lookup_or_create_lock_slot_cached_fast(mutex);
     int thread_chain[LOCKDEP_MAX_THREAD_SLOTS + 1];
@@ -83,6 +83,11 @@ int lockdep_before_blocking_mutex_lock(pthread_mutex_t *mutex) {
     atomic_store_explicit(&g_thread_slots[self_thread_slot].waiting_on_lock_slot,
                           target_lock_slot,
                           memory_order_release);
+    if (LOCKDEP_UNLIKELY(g_report_sites_enabled)) {
+        atomic_store_explicit(&g_thread_slots[self_thread_slot].waiting_on_pc,
+                              waiting_pc,
+                              memory_order_release);
+    }
     found_deadlock = lockdep_collect_actual_deadlock_chain(self_thread_slot,
                                                            target_lock_slot,
                                                            thread_chain,
@@ -106,6 +111,11 @@ void lockdep_cancel_wait(void) {
     atomic_store_explicit(&g_thread_slots[self_thread_slot].waiting_on_lock_slot,
                           LOCKDEP_INVALID_SLOT,
                           memory_order_release);
+    if (LOCKDEP_UNLIKELY(g_report_sites_enabled)) {
+        atomic_store_explicit(&g_thread_slots[self_thread_slot].waiting_on_pc,
+                              (uintptr_t)0,
+                              memory_order_release);
+    }
 }
 
 /**
@@ -113,7 +123,9 @@ void lockdep_cancel_wait(void) {
  * Potential deadlock tracking uses the global dependency graph.
  * Actual deadlock tracking uses owner/waiting state.
  */
-void lockdep_acquire_mutex(pthread_mutex_t *mutex, int clear_wait_state) {
+void lockdep_acquire_mutex(pthread_mutex_t *mutex,
+                           int clear_wait_state,
+                           uintptr_t acquire_pc) {
     int self_thread_slot = lockdep_current_thread_slot();
     int new_lock_slot = lockdep_lookup_or_create_lock_slot_cached_fast(mutex);
     int held_lock_slot_count = tls_thread_state.held_lock_slot_count;
@@ -121,16 +133,26 @@ void lockdep_acquire_mutex(pthread_mutex_t *mutex, int clear_wait_state) {
     if (held_lock_slot_count == 0) {
         tls_thread_state.held_lock_slots[0] = new_lock_slot;
         tls_thread_state.held_lock_slot_count = 1;
+        lockdep_note_thread_holds_lock_slot(new_lock_slot);
     } else {
         lockdep_debug_log_held_lock_slots(new_lock_slot);
-        lockdep_potential_on_acquire(self_thread_slot, new_lock_slot, &tls_thread_state);
+        lockdep_potential_on_acquire(self_thread_slot,
+                                     new_lock_slot,
+                                     &tls_thread_state,
+                                     acquire_pc);
         lockdep_push_held_lock_slot(new_lock_slot);
     }
     if (clear_wait_state) {
         atomic_store_explicit(&g_thread_slots[self_thread_slot].waiting_on_lock_slot,
                               LOCKDEP_INVALID_SLOT,
                               memory_order_release);
+        if (LOCKDEP_UNLIKELY(g_report_sites_enabled)) {
+            atomic_store_explicit(&g_thread_slots[self_thread_slot].waiting_on_pc,
+                                  (uintptr_t)0,
+                                  memory_order_release);
+        }
     }
+    lockdep_store_owner_acquire_pc(new_lock_slot, acquire_pc);
     atomic_store_explicit(&g_lock_slots[new_lock_slot].owner_thread_slot,
                           self_thread_slot,
                           memory_order_release);
@@ -154,17 +176,16 @@ void lockdep_release_mutex(pthread_mutex_t *mutex) {
     }
 
     int expected_owner_thread_slot = self_thread_slot;
-    atomic_compare_exchange_strong_explicit(&g_lock_slots[lock_slot].owner_thread_slot,
-                                            &expected_owner_thread_slot,
-                                            LOCKDEP_INVALID_SLOT,
-                                            memory_order_acq_rel,
-                                            memory_order_acquire);
-
-    if (g_lockdep_mode == LOCKDEP_MODE_RB && lockdep_potential_thread_tracking_active()) {
-        lockdep_potential_on_release(self_thread_slot, lock_slot, &tls_thread_state);
+    if (atomic_compare_exchange_strong_explicit(&g_lock_slots[lock_slot].owner_thread_slot,
+                                                &expected_owner_thread_slot,
+                                                LOCKDEP_INVALID_SLOT,
+                                                memory_order_acq_rel,
+                                                memory_order_acquire)) {
+        lockdep_clear_owner_acquire_pc(lock_slot);
     }
 
     if (held_lock_slot_count == 1 && tls_thread_state.held_lock_slots[0] == lock_slot) {
+        lockdep_note_thread_releases_lock_slot(lock_slot);
         tls_thread_state.held_lock_slot_count = 0;
         return;
     }

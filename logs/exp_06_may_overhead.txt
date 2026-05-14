@@ -1,0 +1,157 @@
+Experiment: Overhead Microbenchmarks (High/Low Contention)
+Date: 2026-05-06
+Commit ID: 87d6252
+
+--- Settings ---
+
+Machine
+  OS       : Linux archdell 7.0.3-arch1-1 x86_64
+  CPU      : 11th Gen Intel Core i7-11700 @ 2.50 GHz (8 cores / 16 threads)
+  Memory   : 16 GiB RAM
+
+Software
+  Compiler : gcc (flags: -Wall -Wextra -pthread; lockdep: -O3 -g -flto
+             -fno-semantic-interposition)
+  Loader   : LD_PRELOAD for lockdep injection
+  Commit   : 87d6252dc1a1db159442be81b9bd91b41f603392
+
+--- Parameters ---
+
+Benchmark binary : benchmarks/bench_overhead.out
+Invocation       : bench_overhead.out <num_threads> <num_locks> <iters_per_thread>
+Thread counts    : 1, 2, 4, 8, 16, 32, 64
+Iterations       : 100,000 per thread
+Metric           : ops_per_sec  (total lock/unlock pairs / wall time)
+
+Scenarios
+  high-contention : num_locks = 1           (all threads share one lock)
+  low-contention  : num_locks = num_threads (each thread owns its own lock,
+                                             isolates lockdep tracking overhead
+                                             from application synchronization)
+
+Conditions per scenario
+  baseline      : no LD_PRELOAD
+  lockdep/glob  : LOCKDEP_MODE=global LD_PRELOAD=./lockdep/liblockdep.so
+  ScaleLockDep  : LOCKDEP_MODE=rb     LD_PRELOAD=./lockdep/liblockdep.so
+
+lockdep limits (lockdep.h)
+  LOCKDEP_MAX_LOCK_SLOTS      = 256
+  LOCKDEP_MAX_HELD_LOCK_SLOTS = 64
+  LOCKDEP_MAX_THREAD_SLOTS    = 128
+
+--- Raw Data ---
+
+High-contention (1 shared lock) — baseline
+threads  locks  iters   wall_ns       total_ops  ops_per_sec
+1        1      100000  1370365       100000     72973259
+2        1      100000  11437637      200000     17486129
+4        1      100000  24006596      400000     16662087
+8        1      100000  51249474      800000     15609916
+16       1      100000  104295474     1600000    15341030
+32       1      100000  207081637     3200000    15452843
+64       1      100000  430052098     6400000    14881918
+
+High-contention (1 shared lock) — lockdep global
+threads  locks  iters   wall_ns       total_ops  ops_per_sec
+1        1      100000  2896003       100000     34530351
+2        1      100000  23766247      200000     8415296
+4        1      100000  41046935      400000     9744942
+8        1      100000  110939951     800000     7211108
+16       1      100000  240347128     1600000    6657038
+32       1      100000  498476164     3200000    6419565
+64       1      100000  983515082     6400000    6507272
+
+High-contention (1 shared lock) — lockdep rb (ScaleLockDep)
+threads  locks  iters   wall_ns       total_ops  ops_per_sec
+1        1      100000  3072843       100000     32543153
+2        1      100000  22335998      200000     8954156
+4        1      100000  42964830      400000     9309940
+8        1      100000  110303123     800000     7252741
+16       1      100000  252239769     1600000    6343171
+32       1      100000  510781629     3200000    6264908
+64       1      100000  1007127150    6400000    6354709
+
+Low-contention (locks = threads) — baseline
+threads  locks  iters   wall_ns       total_ops    ops_per_sec
+1        1      100000  1521651       100000       65718092
+2        2      100000  17539522      400000       22805639
+4        4      100000  76561905      1600000      20898122
+8        8      100000  225543315     6400000      28375924
+16       16     100000  555982602     25600000     46044606
+32       32     100000  1434621489    102400000    71377712
+64       64     100000  3973608380    409600000    103080113
+
+Low-contention (locks = threads) — lockdep global
+threads  locks  iters   wall_ns       total_ops    ops_per_sec
+1        1      100000  2867577       100000       34872647
+2        2      100000  38844877      400000       10297368
+4        4      100000  129407027     1600000      12364089
+8        8      100000  380767355     6400000      16808164
+16       16     100000  839561981     25600000     30492091
+32       32     100000  2253435281    102400000    45441731
+64       64     100000  6543825924    409600000    62593352
+
+Low-contention (locks = threads) — lockdep rb (ScaleLockDep)
+threads  locks  iters   wall_ns       total_ops    ops_per_sec
+1        1      100000  3165745       100000       31588141
+2        2      100000  42883653      400000       9327564
+4        4      100000  130743935     1600000      12237661
+8        8      100000  379173392     6400000      16878821
+16       16     100000  832565178     25600000     30748343
+32       32     100000  2307708227    102400000    44373027
+64       64     100000  7082261676    409600000    57834632
+
+--- Key Findings ---
+
+Overhead ratio = baseline_ops_per_sec / lockdep_ops_per_sec
+
+High-contention (1 shared lock)
+threads  global  rb
+1        2.11x   2.24x
+2        2.08x   1.95x
+4        1.71x   1.79x
+8        2.16x   2.15x
+16       2.30x   2.42x
+32       2.41x   2.47x
+64       2.29x   2.34x
+
+Low-contention (locks = threads)
+threads  global  rb
+1        1.88x   2.08x
+2        2.21x   2.45x
+4        1.69x   1.71x
+8        1.69x   1.68x
+16       1.51x   1.50x
+32       1.57x   1.61x
+64       1.65x   1.78x
+
+--- Comparison with exp_20_apr_overhead.txt ---
+
+f760bcd → 87d6252 (commit f760bcd was global-only on a 6.19 kernel; this
+re-run is on 7.0.3 and adds the rb backend). Numbers are within ~5% of the
+April run for both baseline and global at every cell — no regression.
+
+--- What the Experiment Reveals ---
+
+1. Under high contention, the application is already serialized by the
+   shared mutex; adding lockdep roughly doubles cost per pair (2.0–2.4x
+   across the sweep) regardless of mode. global and rb track each other
+   within 5%; the wait-chain check fires in both, and the per-acquire
+   bookkeeping is the same order of magnitude.
+
+2. Under low contention, the absolute overhead is smaller (1.5–1.8x) and
+   shrinks as thread count grows. The per-thread mutex means TLS-cache
+   lookups and held-stack pushes/pops are the dominant cost, not
+   cycle-detection work — and those scale with parallelism on the same
+   trajectory as baseline pthread.
+
+3. global vs rb is nearly indistinguishable in this benchmark because
+   nesting depth never exceeds 1 — there are no held locks when each
+   acquire happens, so the O(depth) work that rb is designed to offload
+   does not exist. rb costs the enqueue, gains nothing. The pedges and
+   nesting experiments (where depth varies) are where the two backends
+   diverge.
+
+4. The 1-thread high-contention row (2.1x) is pure interception cost
+   (dlsym indirection + recursive guard + held-stack push/pop). This is
+   the floor of lockdep overhead for any workload.

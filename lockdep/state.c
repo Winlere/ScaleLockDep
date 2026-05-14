@@ -19,6 +19,7 @@ __thread lockdep_lock_slot_cache_entry_t
 
 /* Runtime config */
 int g_debug_enabled = 0;
+int g_report_sites_enabled = 0;
 
 static unsigned int lockdep_tls_lock_cache_index(pthread_mutex_t *mutex) {
     uintptr_t addr = (uintptr_t)mutex;
@@ -123,6 +124,9 @@ int lockdep_lookup_or_create_lock_slot(pthread_mutex_t *mutex) {
     atomic_store_explicit(&g_lock_slots[new_lock_slot].owner_thread_slot,
                           LOCKDEP_INVALID_SLOT,
                           memory_order_relaxed);
+    atomic_store_explicit(&g_lock_slots[new_lock_slot].owner_acquire_pc,
+                          (uintptr_t)0,
+                          memory_order_relaxed);
     atomic_store_explicit(&g_lock_slot_count,
                           lock_slot_count + 1,
                           memory_order_release);
@@ -153,6 +157,7 @@ void lockdep_push_held_lock_slot(int lock_slot) {
     }
 
     tls_thread_state.held_lock_slots[tls_thread_state.held_lock_slot_count++] = lock_slot;
+    lockdep_note_thread_holds_lock_slot(lock_slot);
 }
 
 /**
@@ -165,6 +170,7 @@ void lockdep_remove_held_lock_slot(int lock_slot) {
     if (held_lock_slot_count > 0 &&
         tls_thread_state.held_lock_slots[held_lock_slot_count - 1] == lock_slot) {
         tls_thread_state.held_lock_slot_count--;
+        lockdep_note_thread_releases_lock_slot(lock_slot);
         return;
     }
 
@@ -174,6 +180,7 @@ void lockdep_remove_held_lock_slot(int lock_slot) {
                 tls_thread_state.held_lock_slots[j] = tls_thread_state.held_lock_slots[j + 1];
             }
             tls_thread_state.held_lock_slot_count--;
+            lockdep_note_thread_releases_lock_slot(lock_slot);
             return;
         }
     }
@@ -215,6 +222,9 @@ int lockdep_get_or_register_thread_slot(void) {
     g_thread_slots[new_thread_slot].tid = tid;
     atomic_store_explicit(&g_thread_slots[new_thread_slot].waiting_on_lock_slot,
                           LOCKDEP_INVALID_SLOT,
+                          memory_order_relaxed);
+    atomic_store_explicit(&g_thread_slots[new_thread_slot].waiting_on_pc,
+                          (uintptr_t)0,
                           memory_order_relaxed);
     atomic_store_explicit(&g_thread_slot_count,
                           thread_slot_count + 1,
