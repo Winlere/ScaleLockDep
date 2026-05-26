@@ -9,18 +9,35 @@ multi-threaded C programs. It intercepts `pthread_mutex_*` calls via `LD_PRELOAD
 - **Actual deadlocks** — a live circular wait chain, caught the moment a thread is
   about to block forever (exits with code `66` instead of hanging).
 
+Usage is a single command — no flags to learn, no API to call:
+
+```
+LOCKDEP_REPORT_SITES=1 LD_PRELOAD=./lockdep/liblockdep.so your_program
+```
+
+Run your program as usual, and ScaleLockDep reports any potential or actual
+deadlocks it sees.
+
 ---
 
 ## 1. Build it
 
 ```bash
-make build          # builds lockdep/liblockdep.so + the example/benchmark binaries
+make -C lockdep     # produces lockdep/liblockdep.so
 ```
 
-Or just the detector library:
+This produces the shared library that gets injected into your program at runtime
+via `LD_PRELOAD` later: 
+
+```
+lockdep/liblockdep.so
+```
+
+That one library is the entire interface — prefix any run with it and your
+program is under the detector, no rebuild required:
 
 ```bash
-make -C lockdep     # produces lockdep/liblockdep.so
+LD_PRELOAD=lockdep/liblockdep.so your_program
 ```
 
 ## 2. Run a minimal example
@@ -193,6 +210,14 @@ naive method for the smallest critical sections (1.8× vs 3.7×).
 ---
 
 ## How it works
+
+![ScaleLockDep design](design.png)
+
+ScaleLockDep interposes a thin **shim** between the application's
+`pthread_mutex_*` calls and the real pthread functions. The shim runs the
+synchronous actual-deadlock check, records lock-order events into per-thread
+storage, and hands them to a global worker that builds and traverses the
+lock-dependency graph — then forwards to the real pthread call.
 
 On every intercepted lock operation, ScaleLockDep does two things in addition to
 forwarding to the real pthread call:
